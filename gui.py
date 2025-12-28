@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from deepgram import DeepgramClient
+from deepgram.core import RequestOptions
 
 
 @dataclass
@@ -35,6 +36,8 @@ class TranscriptionOptions:
     summarize: str
     extra_json: str
     line_width: int
+    timeout_seconds: int
+    max_retries: int
 
 
 class DeepgramSubtitleGUI:
@@ -90,6 +93,8 @@ class DeepgramSubtitleGUI:
         self.summarize_var = tk.StringVar(value="")
         self.extra_json_var = tk.StringVar(value="{}")
         self.line_width_var = tk.IntVar(value=42)
+        self.timeout_seconds_var = tk.IntVar(value=300)
+        self.max_retries_var = tk.IntVar(value=2)
 
         row = 0
         row = self._add_labeled_entry(options_frame, row, "API Key", self.api_key_var)
@@ -130,6 +135,20 @@ class DeepgramSubtitleGUI:
         )
         line_width_entry = tk.Entry(options_frame, textvariable=self.line_width_var)
         line_width_entry.grid(row=row, column=1, sticky="ew", padx=4)
+        row += 1
+
+        tk.Label(options_frame, text="请求超时(秒)").grid(
+            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
+        )
+        timeout_entry = tk.Entry(options_frame, textvariable=self.timeout_seconds_var)
+        timeout_entry.grid(row=row, column=1, sticky="ew", padx=4)
+        row += 1
+
+        tk.Label(options_frame, text="重试次数").grid(
+            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
+        )
+        retries_entry = tk.Entry(options_frame, textvariable=self.max_retries_var)
+        retries_entry.grid(row=row, column=1, sticky="ew", padx=4)
         row += 1
 
         options_frame.columnconfigure(1, weight=1)
@@ -204,6 +223,8 @@ class DeepgramSubtitleGUI:
             summarize=self.summarize_var.get().strip(),
             extra_json=self.extra_json_var.get().strip() or "{}",
             line_width=int(self.line_width_var.get()),
+            timeout_seconds=int(self.timeout_seconds_var.get()),
+            max_retries=int(self.max_retries_var.get()),
         )
 
         self.status_text.set("转录中，请稍候...")
@@ -251,6 +272,12 @@ class DeepgramSubtitleGUI:
             "profanity_filter": options.profanity_filter,
             "paragraphs": options.paragraphs,
         }
+
+        request_options: RequestOptions = {
+            "timeout_in_seconds": max(1, options.timeout_seconds),
+            "max_retries": max(0, options.max_retries),
+        }
+        params["request_options"] = request_options
 
         if options.keywords:
             params["keywords"] = [item.strip() for item in options.keywords.split(",") if item.strip()]
