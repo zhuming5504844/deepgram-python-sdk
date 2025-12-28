@@ -246,7 +246,10 @@ class DeepgramSubtitleGUI:
             self.log(f"请求参数: {json.dumps(params, ensure_ascii=False)}")
 
             response = client.listen.v1.media.transcribe_file(request=audio_data, **params)
-            srt_text = self._build_srt(response, options.line_width)
+            response_dict = self._response_to_dict(response)
+            if response_dict.get("results") is None:
+                raise ValueError("转录返回结果为空，请确认请求未被异步接收或参数设置正确。")
+            srt_text = self._build_srt(response_dict, options.line_width)
 
             output_path = os.path.splitext(path)[0] + ".srt"
             with open(output_path, "w", encoding="utf-8") as srt_file:
@@ -309,8 +312,15 @@ class DeepgramSubtitleGUI:
         except json.JSONDecodeError as exc:
             raise ValueError(f"额外参数 JSON 解析失败: {exc}") from exc
 
+    def _response_to_dict(self, response: object) -> dict:
+        if hasattr(response, "dict"):
+            return response.dict()  # type: ignore[no-any-return]
+        if isinstance(response, dict):
+            return response
+        return {}
+
     def _build_srt(self, response: dict, line_width: int) -> str:
-        results = response.get("results", {})
+        results = response.get("results", {}) or {}
         utterances = results.get("utterances")
         if utterances:
             return self._srt_from_utterances(utterances, line_width)
