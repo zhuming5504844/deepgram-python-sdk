@@ -217,7 +217,7 @@ class DeepgramSubtitleGUI:
 
     def transcribe_file(self, path: str, options: TranscriptionOptions) -> None:
         try:
-            client = DeepgramClient(options.api_key or None)
+            client = DeepgramClient(api_key=options.api_key or None)
             with open(path, "rb") as audio_file:
                 audio_data = audio_file.read()
 
