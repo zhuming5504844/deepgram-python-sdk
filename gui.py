@@ -430,15 +430,21 @@ class DeepgramSubtitleGUI:
     def _build_srt(self, response: dict, line_width: int) -> str:
         results = response.get("results", {}) or {}
         utterances = results.get("utterances")
-        if utterances:
-            return self._srt_from_utterances(utterances, line_width)
-
         channels = results.get("channels", [])
         if channels:
             alternatives = channels[0].get("alternatives", [])
             if alternatives:
                 words = alternatives[0].get("words", [])
+                if utterances:
+                    utterance_end = max((item.get("end", 0) for item in utterances), default=0)
+                    words_end = max((item.get("end", 0) for item in words), default=0)
+                    if words_end > utterance_end + 0.5:
+                        return self._srt_from_words(words, line_width)
+                    return self._srt_from_utterances(utterances, line_width)
                 return self._srt_from_words(words, line_width)
+
+        if utterances:
+            return self._srt_from_utterances(utterances, line_width)
 
         transcript = results.get("transcripts") or []
         if transcript:
