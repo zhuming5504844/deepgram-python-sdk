@@ -4,7 +4,7 @@ import threading
 import textwrap
 import tkinter as tk
 from dataclasses import dataclass
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from dotenv import load_dotenv
 
@@ -56,6 +56,10 @@ class DeepgramSubtitleGUI:
         else:
             self.log("拖放功能需要 tkinterdnd2 (可选依赖)，当前将使用选择文件按钮。")
 
+        self._load_settings()
+        self._ensure_settings_file()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
     def _build_ui(self) -> None:
         top_frame = tk.Frame(self.root)
         top_frame.pack(fill=tk.X, padx=12, pady=8)
@@ -75,7 +79,7 @@ class DeepgramSubtitleGUI:
 
         self.api_key_var = tk.StringVar(value=os.getenv("DEEPGRAM_API_KEY", ""))
         self.model_var = tk.StringVar(value="nova-2")
-        self.language_var = tk.StringVar(value="")
+        self.language_var = tk.StringVar(value="自动(检测)")
         self.detect_language_var = tk.BooleanVar(value=True)
         self.punctuate_var = tk.BooleanVar(value=True)
         self.smart_format_var = tk.BooleanVar(value=True)
@@ -99,7 +103,7 @@ class DeepgramSubtitleGUI:
         row = 0
         row = self._add_labeled_entry(options_frame, row, "API Key", self.api_key_var)
         row = self._add_labeled_entry(options_frame, row, "模型(model)", self.model_var)
-        row = self._add_labeled_entry(options_frame, row, "语言(language, 可留空)", self.language_var)
+        row = self._add_language_dropdown(options_frame, row)
 
         checkbox_frame = tk.Frame(options_frame)
         checkbox_frame.grid(row=row, column=0, columnspan=2, sticky="w", pady=6)
@@ -168,6 +172,14 @@ class DeepgramSubtitleGUI:
         entry.grid(row=row, column=1, sticky="ew", padx=4, pady=2)
         return row + 1
 
+    def _add_language_dropdown(self, parent: tk.Widget, row: int) -> int:
+        tk.Label(parent, text="语言(language)").grid(row=row, column=0, sticky="w", padx=4, pady=2)
+        language_values = list(self._language_options().keys())
+        combo = ttk.Combobox(parent, textvariable=self.language_var, values=language_values)
+        combo.grid(row=row, column=1, sticky="ew", padx=4, pady=2)
+        combo.set(self.language_var.get() or language_values[0])
+        return row + 1
+
     def _add_checkbox(self, parent: tk.Widget, label: str, variable: tk.BooleanVar) -> None:
         tk.Checkbutton(parent, text=label, variable=variable).pack(side=tk.LEFT, padx=6)
 
@@ -205,7 +217,7 @@ class DeepgramSubtitleGUI:
         options = TranscriptionOptions(
             api_key=self.api_key_var.get().strip(),
             model=self.model_var.get().strip(),
-            language=self.language_var.get().strip(),
+            language=self._normalize_language(self.language_var.get().strip()),
             detect_language=self.detect_language_var.get(),
             punctuate=self.punctuate_var.get(),
             smart_format=self.smart_format_var.get(),
@@ -229,6 +241,8 @@ class DeepgramSubtitleGUI:
 
         self.status_text.set("转录中，请稍候...")
         self.log("开始转录，请等待...")
+
+        self._save_settings()
 
         threading.Thread(
             target=self.transcribe_file,
@@ -300,6 +314,100 @@ class DeepgramSubtitleGUI:
         extra_params = self._parse_extra_json(options.extra_json)
         params.update(extra_params)
         return params
+
+    def _language_options(self) -> dict:
+        return {
+            "自动(检测)": "",
+            "多语言(multi)": "multi",
+            "英语(en)": "en",
+            "日语(ja)": "ja",
+            "中文(zh)": "zh",
+            "韩语(ko)": "ko",
+            "法语(fr)": "fr",
+            "德语(de)": "de",
+            "西班牙语(es)": "es",
+            "葡萄牙语(pt)": "pt",
+            "意大利语(it)": "it",
+        }
+
+    def _normalize_language(self, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return ""
+        options = self._language_options()
+        return options.get(value, value)
+
+    def _settings_path(self) -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui_settings.json")
+
+    def _load_settings(self) -> None:
+        path = self._settings_path()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as settings_file:
+                data = json.load(settings_file)
+        except (OSError, json.JSONDecodeError) as exc:
+            self.log(f"读取设置失败: {exc}")
+            return
+
+        self.api_key_var.set(data.get("api_key", self.api_key_var.get()))
+        self.model_var.set(data.get("model", self.model_var.get()))
+        self.language_var.set(data.get("language", self.language_var.get()))
+        self.detect_language_var.set(data.get("detect_language", self.detect_language_var.get()))
+        self.punctuate_var.set(data.get("punctuate", self.punctuate_var.get()))
+        self.smart_format_var.set(data.get("smart_format", self.smart_format_var.get()))
+        self.utterances_var.set(data.get("utterances", self.utterances_var.get()))
+        self.diarize_var.set(data.get("diarize", self.diarize_var.get()))
+        self.numerals_var.set(data.get("numerals", self.numerals_var.get()))
+        self.filler_words_var.set(data.get("filler_words", self.filler_words_var.get()))
+        self.profanity_filter_var.set(data.get("profanity_filter", self.profanity_filter_var.get()))
+        self.paragraphs_var.set(data.get("paragraphs", self.paragraphs_var.get()))
+        self.keywords_var.set(data.get("keywords", self.keywords_var.get()))
+        self.search_var.set(data.get("search", self.search_var.get()))
+        self.replace_var.set(data.get("replace", self.replace_var.get()))
+        self.tag_var.set(data.get("tag", self.tag_var.get()))
+        self.redact_var.set(data.get("redact", self.redact_var.get()))
+        self.summarize_var.set(data.get("summarize", self.summarize_var.get()))
+        self.extra_json_var.set(data.get("extra_json", self.extra_json_var.get()))
+        self.line_width_var.set(int(data.get("line_width", self.line_width_var.get())))
+        self.timeout_seconds_var.set(int(data.get("timeout_seconds", self.timeout_seconds_var.get())))
+        self.max_retries_var.set(int(data.get("max_retries", self.max_retries_var.get())))
+
+    def _ensure_settings_file(self) -> None:
+        if not os.path.exists(self._settings_path()):
+            self._save_settings()
+
+    def _save_settings(self) -> None:
+        data = {
+            "api_key": self.api_key_var.get().strip(),
+            "model": self.model_var.get().strip(),
+            "language": self.language_var.get().strip(),
+            "detect_language": self.detect_language_var.get(),
+            "punctuate": self.punctuate_var.get(),
+            "smart_format": self.smart_format_var.get(),
+            "utterances": self.utterances_var.get(),
+            "diarize": self.diarize_var.get(),
+            "numerals": self.numerals_var.get(),
+            "filler_words": self.filler_words_var.get(),
+            "profanity_filter": self.profanity_filter_var.get(),
+            "paragraphs": self.paragraphs_var.get(),
+            "keywords": self.keywords_var.get().strip(),
+            "search": self.search_var.get().strip(),
+            "replace": self.replace_var.get().strip(),
+            "tag": self.tag_var.get().strip(),
+            "redact": self.redact_var.get().strip(),
+            "summarize": self.summarize_var.get().strip(),
+            "extra_json": self.extra_json_var.get().strip(),
+            "line_width": int(self.line_width_var.get()),
+            "timeout_seconds": int(self.timeout_seconds_var.get()),
+            "max_retries": int(self.max_retries_var.get()),
+        }
+        try:
+            with open(self._settings_path(), "w", encoding="utf-8") as settings_file:
+                json.dump(data, settings_file, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            self.log(f"保存设置失败: {exc}")
 
     def _parse_extra_json(self, raw: str) -> dict:
         if not raw:
@@ -387,6 +495,10 @@ class DeepgramSubtitleGUI:
     def log(self, message: str) -> None:
         self.log_output.insert(tk.END, message + "\n")
         self.log_output.see(tk.END)
+
+    def on_close(self) -> None:
+        self._save_settings()
+        self.root.destroy()
 
 
 if __name__ == "__main__":
