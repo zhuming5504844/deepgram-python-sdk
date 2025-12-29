@@ -438,7 +438,7 @@ class DeepgramSubtitleGUI:
                 if utterances:
                     utterance_end = max((item.get("end", 0) for item in utterances), default=0)
                     words_end = max((item.get("end", 0) for item in words), default=0)
-                    if words_end > utterance_end + 0.5:
+                    if words_end > utterance_end + 0.5 or self._words_outside_utterances(words, utterances):
                         return self._srt_from_words(words, line_width)
                     return self._srt_from_utterances(utterances, line_width)
                 return self._srt_from_words(words, line_width)
@@ -451,6 +451,23 @@ class DeepgramSubtitleGUI:
             return self._srt_from_text(transcript[0].get("transcript", ""), line_width)
 
         return ""
+
+    def _words_outside_utterances(self, words: list, utterances: list) -> bool:
+        if not words or not utterances:
+            return False
+        sorted_utterances = sorted(utterances, key=lambda item: item.get("start", 0))
+        utterance_index = 0
+        current = sorted_utterances[utterance_index]
+        for word in words:
+            word_start = word.get("start", 0)
+            while utterance_index < len(sorted_utterances) and word_start > current.get("end", 0):
+                utterance_index += 1
+                if utterance_index >= len(sorted_utterances):
+                    return True
+                current = sorted_utterances[utterance_index]
+            if word_start < current.get("start", 0):
+                return True
+        return False
 
     def _srt_from_utterances(self, utterances: list, line_width: int) -> str:
         lines = []
