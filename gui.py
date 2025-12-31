@@ -99,9 +99,11 @@ class DeepgramSubtitleGUI:
         self.line_width_var = tk.IntVar(value=42)
         self.timeout_seconds_var = tk.IntVar(value=300)
         self.max_retries_var = tk.IntVar(value=2)
+        self.api_key_select_var = tk.StringVar(value="")
+        self.api_key_history: list[str] = []
 
         row = 0
-        row = self._add_labeled_entry(options_frame, row, "API Key", self.api_key_var)
+        row = self._add_api_key_row(options_frame, row)
         row = self._add_labeled_entry(options_frame, row, "模型(model)", self.model_var)
         row = self._add_language_dropdown(options_frame, row)
 
@@ -172,6 +174,26 @@ class DeepgramSubtitleGUI:
         entry.grid(row=row, column=1, sticky="ew", padx=4, pady=2)
         return row + 1
 
+    def _add_api_key_row(self, parent: tk.Widget, row: int) -> int:
+        tk.Label(parent, text="API Key").grid(row=row, column=0, sticky="w", padx=4, pady=2)
+        api_frame = tk.Frame(parent)
+        api_frame.grid(row=row, column=1, sticky="ew", padx=4, pady=2)
+        api_frame.columnconfigure(0, weight=1)
+
+        tk.Entry(api_frame, textvariable=self.api_key_var).grid(row=0, column=0, sticky="ew")
+        tk.Button(api_frame, text="粘贴", command=self.paste_api_key).grid(row=0, column=1, padx=4)
+        tk.Button(api_frame, text="导入", command=self.import_api_key).grid(row=0, column=2, padx=4)
+        self.api_key_combo = ttk.Combobox(
+            api_frame,
+            textvariable=self.api_key_select_var,
+            values=self.api_key_history,
+            state="readonly",
+            width=24,
+        )
+        self.api_key_combo.grid(row=0, column=3, padx=4)
+        self.api_key_combo.bind("<<ComboboxSelected>>", self._on_api_key_selected)
+        return row + 1
+
     def _add_language_dropdown(self, parent: tk.Widget, row: int) -> int:
         tk.Label(parent, text="语言(language)").grid(row=row, column=0, sticky="w", padx=4, pady=2)
         language_values = list(self._language_options().keys())
@@ -204,6 +226,68 @@ class DeepgramSubtitleGUI:
         if path:
             self.audio_path.set(path)
             self.log(f"已拖放文件: {path}")
+
+    def paste_api_key(self) -> None:
+        try:
+            key = self.root.clipboard_get().strip()
+        except tk.TclError:
+            messagebox.showwarning("提示", "剪贴板为空或无法读取。")
+            return
+        if key:
+            self._set_api_key(key)
+
+    def import_api_key(self) -> None:
+        filename = filedialog.askopenfilename(
+            title="导入 API Key",
+            filetypes=(("Text", "*.txt *.env"), ("All files", "*.*")),
+        )
+        if not filename:
+            return
+        try:
+            with open(filename, "r", encoding="utf-8") as key_file:
+                content = key_file.read().strip()
+        except OSError as exc:
+            messagebox.showerror("错误", f"读取失败: {exc}")
+            return
+
+        key = self._extract_api_key(content)
+        if not key:
+            messagebox.showwarning("提示", "未找到有效的 API Key。")
+            return
+        self._set_api_key(key)
+
+    def _extract_api_key(self, content: str) -> str:
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("DEEPGRAM_API_KEY"):
+                _, value = line.split("=", 1)
+                return value.strip().strip("'").strip('"')
+        return content.splitlines()[0].strip() if content else ""
+
+    def _set_api_key(self, key: str) -> None:
+        self.api_key_var.set(key)
+        self._add_api_key_to_history(key)
+        self._update_api_key_combo()
+
+    def _add_api_key_to_history(self, key: str) -> None:
+        if not key:
+            return
+        if key in self.api_key_history:
+            self.api_key_history.remove(key)
+        self.api_key_history.insert(0, key)
+
+    def _update_api_key_combo(self) -> None:
+        if hasattr(self, "api_key_combo"):
+            self.api_key_combo["values"] = self.api_key_history
+            if self.api_key_var.get() in self.api_key_history:
+                self.api_key_select_var.set(self.api_key_var.get())
+
+    def _on_api_key_selected(self, event: tk.Event) -> None:
+        selected = self.api_key_select_var.get().strip()
+        if selected:
+            self.api_key_var.set(selected)
 
     def start_transcription(self) -> None:
         path = self.audio_path.get().strip()
@@ -352,6 +436,10 @@ class DeepgramSubtitleGUI:
             return
 
         self.api_key_var.set(data.get("api_key", self.api_key_var.get()))
+        self.api_key_history = list(dict.fromkeys(data.get("api_keys", [])))
+        if self.api_key_var.get():
+            self._add_api_key_to_history(self.api_key_var.get())
+        self._update_api_key_combo()
         self.model_var.set(data.get("model", self.model_var.get()))
         self.language_var.set(data.get("language", self.language_var.get()))
         self.detect_language_var.set(data.get("detect_language", self.detect_language_var.get()))
@@ -379,8 +467,10 @@ class DeepgramSubtitleGUI:
             self._save_settings()
 
     def _save_settings(self) -> None:
+        self._add_api_key_to_history(self.api_key_var.get().strip())
         data = {
             "api_key": self.api_key_var.get().strip(),
+            "api_keys": self.api_key_history,
             "model": self.model_var.get().strip(),
             "language": self.language_var.get().strip(),
             "detect_language": self.detect_language_var.get(),
