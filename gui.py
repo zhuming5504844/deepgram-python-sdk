@@ -20,6 +20,7 @@ class TranscriptionOptions:
     model: str
     language: str
     detect_language: bool
+    word_timestamps: bool
     punctuate: bool
     smart_format: bool
     utterances: bool
@@ -78,9 +79,10 @@ class DeepgramSubtitleGUI:
         options_frame.pack(fill=tk.BOTH, padx=12, pady=8, expand=True)
 
         self.api_key_var = tk.StringVar(value=os.getenv("DEEPGRAM_API_KEY", ""))
-        self.model_var = tk.StringVar(value="nova-2")
+        self.model_var = tk.StringVar(value="nova-3")
         self.language_var = tk.StringVar(value="自动(检测)")
         self.detect_language_var = tk.BooleanVar(value=False)
+        self.word_timestamps_var = tk.BooleanVar(value=False)
         self.punctuate_var = tk.BooleanVar(value=True)
         self.smart_format_var = tk.BooleanVar(value=False)
         self.utterances_var = tk.BooleanVar(value=True)
@@ -111,6 +113,7 @@ class DeepgramSubtitleGUI:
         row += 1
 
         self._add_checkbox(checkbox_frame, "自动识别语言", self.detect_language_var)
+        self._add_checkbox(checkbox_frame, "字词级时间戳", self.word_timestamps_var)
         self._add_checkbox(checkbox_frame, "标点", self.punctuate_var)
         self._add_checkbox(checkbox_frame, "智能格式化", self.smart_format_var)
         self._add_checkbox(checkbox_frame, "按话语分段(utterances)", self.utterances_var)
@@ -338,6 +341,7 @@ class DeepgramSubtitleGUI:
             model=self.model_var.get().strip(),
             language=self._normalize_language(self.language_var.get().strip()),
             detect_language=self.detect_language_var.get(),
+            word_timestamps=self.word_timestamps_var.get(),
             punctuate=self.punctuate_var.get(),
             smart_format=self.smart_format_var.get(),
             utterances=self.utterances_var.get(),
@@ -399,6 +403,7 @@ class DeepgramSubtitleGUI:
             "model": options.model or None,
             "language": options.language or None,
             "detect_language": options.detect_language,
+            "word_timestamps": options.word_timestamps,
             "punctuate": options.punctuate,
             "smart_format": options.smart_format,
             "utterances": options.utterances,
@@ -478,6 +483,7 @@ class DeepgramSubtitleGUI:
         self.model_var.set(data.get("model", self.model_var.get()))
         self.language_var.set(data.get("language", self.language_var.get()))
         self.detect_language_var.set(data.get("detect_language", self.detect_language_var.get()))
+        self.word_timestamps_var.set(data.get("word_timestamps", self.word_timestamps_var.get()))
         self.punctuate_var.set(data.get("punctuate", self.punctuate_var.get()))
         self.smart_format_var.set(data.get("smart_format", self.smart_format_var.get()))
         self.utterances_var.set(data.get("utterances", self.utterances_var.get()))
@@ -509,6 +515,7 @@ class DeepgramSubtitleGUI:
             "model": self.model_var.get().strip(),
             "language": self.language_var.get().strip(),
             "detect_language": self.detect_language_var.get(),
+            "word_timestamps": self.word_timestamps_var.get(),
             "punctuate": self.punctuate_var.get(),
             "smart_format": self.smart_format_var.get(),
             "utterances": self.utterances_var.get(),
