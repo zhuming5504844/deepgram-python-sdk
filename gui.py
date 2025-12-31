@@ -37,6 +37,10 @@ class TranscriptionOptions:
     summarize: str
     extra_json: str
     line_width: int
+    max_chars: int
+    max_duration: float
+    max_pause: float
+    word_segmentation: bool
     timeout_seconds: int
     max_retries: int
 
@@ -99,6 +103,10 @@ class DeepgramSubtitleGUI:
         self.summarize_var = tk.StringVar(value="")
         self.extra_json_var = tk.StringVar(value="{}")
         self.line_width_var = tk.IntVar(value=42)
+        self.max_chars_var = tk.IntVar(value=16)
+        self.max_duration_var = tk.DoubleVar(value=6.0)
+        self.max_pause_var = tk.DoubleVar(value=1.0)
+        self.word_segmentation_var = tk.BooleanVar(value=True)
         self.timeout_seconds_var = tk.IntVar(value=300)
         self.max_retries_var = tk.IntVar(value=2)
         self.api_key_history: list[str] = []
@@ -143,6 +151,32 @@ class DeepgramSubtitleGUI:
         )
         line_width_entry = tk.Entry(options_frame, textvariable=self.line_width_var)
         line_width_entry.grid(row=row, column=1, sticky="ew", padx=4)
+        row += 1
+
+        tk.Label(options_frame, text="每段最大字符数").grid(
+            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
+        )
+        max_chars_entry = tk.Entry(options_frame, textvariable=self.max_chars_var)
+        max_chars_entry.grid(row=row, column=1, sticky="ew", padx=4)
+        row += 1
+
+        tk.Label(options_frame, text="每段最长期限(秒)").grid(
+            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
+        )
+        max_duration_entry = tk.Entry(options_frame, textvariable=self.max_duration_var)
+        max_duration_entry.grid(row=row, column=1, sticky="ew", padx=4)
+        row += 1
+
+        tk.Label(options_frame, text="每段最大停顿(秒)").grid(
+            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
+        )
+        max_pause_entry = tk.Entry(options_frame, textvariable=self.max_pause_var)
+        max_pause_entry.grid(row=row, column=1, sticky="ew", padx=4)
+        row += 1
+
+        tk.Checkbutton(options_frame, text="启用字词级自动分段", variable=self.word_segmentation_var).grid(
+            row=row, column=0, columnspan=2, sticky="w", padx=4, pady=(6, 2)
+        )
         row += 1
 
         tk.Label(options_frame, text="请求超时(秒)").grid(
@@ -351,6 +385,10 @@ class DeepgramSubtitleGUI:
             summarize=self.summarize_var.get().strip(),
             extra_json=self.extra_json_var.get().strip() or "{}",
             line_width=int(self.line_width_var.get()),
+            max_chars=int(self.max_chars_var.get()),
+            max_duration=float(self.max_duration_var.get()),
+            max_pause=float(self.max_pause_var.get()),
+            word_segmentation=self.word_segmentation_var.get(),
             timeout_seconds=int(self.timeout_seconds_var.get()),
             max_retries=int(self.max_retries_var.get()),
         )
@@ -379,7 +417,7 @@ class DeepgramSubtitleGUI:
             response_dict = self._response_to_dict(response)
             if response_dict.get("results") is None:
                 raise ValueError("转录返回结果为空，请确认请求未被异步接收或参数设置正确。")
-            srt_text = self._build_srt(response_dict, options.line_width)
+            srt_text = self._build_srt(response_dict, options)
 
             output_path = os.path.splitext(path)[0] + ".srt"
             with open(output_path, "w", encoding="utf-8") as srt_file:
@@ -494,6 +532,10 @@ class DeepgramSubtitleGUI:
         self.summarize_var.set(data.get("summarize", self.summarize_var.get()))
         self.extra_json_var.set(data.get("extra_json", self.extra_json_var.get()))
         self.line_width_var.set(int(data.get("line_width", self.line_width_var.get())))
+        self.max_chars_var.set(int(data.get("max_chars", self.max_chars_var.get())))
+        self.max_duration_var.set(float(data.get("max_duration", self.max_duration_var.get())))
+        self.max_pause_var.set(float(data.get("max_pause", self.max_pause_var.get())))
+        self.word_segmentation_var.set(bool(data.get("word_segmentation", self.word_segmentation_var.get())))
         self.timeout_seconds_var.set(int(data.get("timeout_seconds", self.timeout_seconds_var.get())))
         self.max_retries_var.set(int(data.get("max_retries", self.max_retries_var.get())))
 
@@ -526,6 +568,10 @@ class DeepgramSubtitleGUI:
             "summarize": self.summarize_var.get().strip(),
             "extra_json": self.extra_json_var.get().strip(),
             "line_width": int(self.line_width_var.get()),
+            "max_chars": int(self.max_chars_var.get()),
+            "max_duration": float(self.max_duration_var.get()),
+            "max_pause": float(self.max_pause_var.get()),
+            "word_segmentation": self.word_segmentation_var.get(),
             "timeout_seconds": int(self.timeout_seconds_var.get()),
             "max_retries": int(self.max_retries_var.get()),
         }
@@ -553,7 +599,11 @@ class DeepgramSubtitleGUI:
             return response
         return {}
 
-    def _build_srt(self, response: dict, line_width: int) -> str:
+    def _build_srt(self, response: dict, options: TranscriptionOptions) -> str:
+        line_width = max(1, options.line_width)
+        max_chars = max(1, options.max_chars)
+        max_duration = max(0.1, options.max_duration)
+        max_pause = max(0.0, options.max_pause)
         results = response.get("results", {}) or {}
         utterances = results.get("utterances")
         channels = results.get("channels", [])
@@ -561,13 +611,16 @@ class DeepgramSubtitleGUI:
             alternatives = channels[0].get("alternatives", [])
             if alternatives:
                 words = alternatives[0].get("words", [])
+                if options.word_segmentation and words:
+                    return self._srt_from_words(words, line_width, max_chars, max_duration, max_pause)
                 if utterances:
                     utterance_end = max((item.get("end", 0) for item in utterances), default=0)
                     words_end = max((item.get("end", 0) for item in words), default=0)
                     if words_end > utterance_end + 0.5 or self._words_outside_utterances(words, utterances):
-                        return self._srt_from_words(words, line_width)
+                        return self._srt_from_words(words, line_width, max_chars, max_duration, max_pause)
                     return self._srt_from_utterances(utterances, line_width)
-                return self._srt_from_words(words, line_width)
+                if words:
+                    return self._srt_from_words(words, line_width, max_chars, max_duration, max_pause)
 
         if utterances:
             return self._srt_from_utterances(utterances, line_width)
@@ -607,18 +660,28 @@ class DeepgramSubtitleGUI:
             )
         return "\n".join(lines)
 
-    def _srt_from_words(self, words: list, line_width: int) -> str:
+    def _srt_from_words(
+        self,
+        words: list,
+        line_width: int,
+        max_chars: int,
+        max_duration: float,
+        max_pause: float,
+    ) -> str:
         if not words:
             return ""
         segments = []
         current = {"start": words[0]["start"], "end": words[0]["end"], "text": words[0]["word"]}
         for word in words[1:]:
             text = current["text"]
-            if word["start"] - current["end"] > 1.2 or len(text) > line_width:
+            next_text = f"{text} {word['word']}".strip()
+            duration = word["end"] - current["start"]
+            pause = word["start"] - current["end"]
+            if pause > max_pause or duration > max_duration or len(next_text) > max_chars:
                 segments.append(current)
                 current = {"start": word["start"], "end": word["end"], "text": word["word"]}
             else:
-                current["text"] = f"{current['text']} {word['word']}"
+                current["text"] = next_text
                 current["end"] = word["end"]
         segments.append(current)
 
