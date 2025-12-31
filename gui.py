@@ -403,7 +403,6 @@ class DeepgramSubtitleGUI:
             "model": options.model or None,
             "language": options.language or None,
             "detect_language": options.detect_language,
-            "word_timestamps": options.word_timestamps,
             "punctuate": options.punctuate,
             "smart_format": options.smart_format,
             "utterances": options.utterances,
@@ -432,6 +431,8 @@ class DeepgramSubtitleGUI:
             params["redact"] = options.redact
         if options.summarize:
             params["summarize"] = options.summarize
+        if options.word_timestamps:
+            params["timestamps"] = "word"
 
         params = {key: value for key, value in params.items() if value is not None}
 
