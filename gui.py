@@ -1,7 +1,6 @@
 import json
 import os
 import threading
-import textwrap
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -36,7 +35,6 @@ class TranscriptionOptions:
     redact: str
     summarize: str
     extra_json: str
-    line_width: int
     max_chars: int
     max_duration: float
     max_pause: float
@@ -102,7 +100,6 @@ class DeepgramSubtitleGUI:
         self.redact_var = tk.StringVar(value="")
         self.summarize_var = tk.StringVar(value="")
         self.extra_json_var = tk.StringVar(value="{}")
-        self.line_width_var = tk.IntVar(value=42)
         self.max_chars_var = tk.IntVar(value=16)
         self.max_duration_var = tk.DoubleVar(value=6.0)
         self.max_pause_var = tk.DoubleVar(value=1.0)
@@ -144,13 +141,6 @@ class DeepgramSubtitleGUI:
         row += 1
         extra_entry = tk.Entry(options_frame, textvariable=self.extra_json_var)
         extra_entry.grid(row=row, column=0, columnspan=2, sticky="ew", padx=4)
-        row += 1
-
-        tk.Label(options_frame, text="字幕行宽(字符数)").grid(
-            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
-        )
-        line_width_entry = tk.Entry(options_frame, textvariable=self.line_width_var)
-        line_width_entry.grid(row=row, column=1, sticky="ew", padx=4)
         row += 1
 
         tk.Label(options_frame, text="每段最大字符数").grid(
@@ -384,7 +374,6 @@ class DeepgramSubtitleGUI:
             redact=self.redact_var.get().strip(),
             summarize=self.summarize_var.get().strip(),
             extra_json=self.extra_json_var.get().strip() or "{}",
-            line_width=int(self.line_width_var.get()),
             max_chars=int(self.max_chars_var.get()),
             max_duration=float(self.max_duration_var.get()),
             max_pause=float(self.max_pause_var.get()),
@@ -462,8 +451,6 @@ class DeepgramSubtitleGUI:
             params["redact"] = options.redact
         if options.summarize:
             params["summarize"] = options.summarize
-        if options.word_timestamps:
-            params["timestamps"] = "word"
 
         params = {key: value for key, value in params.items() if value is not None}
 
@@ -531,7 +518,6 @@ class DeepgramSubtitleGUI:
         self.redact_var.set(data.get("redact", self.redact_var.get()))
         self.summarize_var.set(data.get("summarize", self.summarize_var.get()))
         self.extra_json_var.set(data.get("extra_json", self.extra_json_var.get()))
-        self.line_width_var.set(int(data.get("line_width", self.line_width_var.get())))
         self.max_chars_var.set(int(data.get("max_chars", self.max_chars_var.get())))
         self.max_duration_var.set(float(data.get("max_duration", self.max_duration_var.get())))
         self.max_pause_var.set(float(data.get("max_pause", self.max_pause_var.get())))
@@ -567,7 +553,6 @@ class DeepgramSubtitleGUI:
             "redact": self.redact_var.get().strip(),
             "summarize": self.summarize_var.get().strip(),
             "extra_json": self.extra_json_var.get().strip(),
-            "line_width": int(self.line_width_var.get()),
             "max_chars": int(self.max_chars_var.get()),
             "max_duration": float(self.max_duration_var.get()),
             "max_pause": float(self.max_pause_var.get()),
@@ -600,7 +585,6 @@ class DeepgramSubtitleGUI:
         return {}
 
     def _build_srt(self, response: dict, options: TranscriptionOptions) -> str:
-        line_width = max(1, options.line_width)
         max_chars = max(1, options.max_chars)
         max_duration = max(0.1, options.max_duration)
         max_pause = max(0.0, options.max_pause)
@@ -612,22 +596,22 @@ class DeepgramSubtitleGUI:
             if alternatives:
                 words = alternatives[0].get("words", [])
                 if options.word_segmentation and words:
-                    return self._srt_from_words(words, line_width, max_chars, max_duration, max_pause)
+                    return self._srt_from_words(words, max_chars, max_duration, max_pause)
                 if utterances:
                     utterance_end = max((item.get("end", 0) for item in utterances), default=0)
                     words_end = max((item.get("end", 0) for item in words), default=0)
                     if words_end > utterance_end + 0.5 or self._words_outside_utterances(words, utterances):
-                        return self._srt_from_words(words, line_width, max_chars, max_duration, max_pause)
-                    return self._srt_from_utterances(utterances, line_width)
+                        return self._srt_from_words(words, max_chars, max_duration, max_pause)
+                    return self._srt_from_utterances(utterances)
                 if words:
-                    return self._srt_from_words(words, line_width, max_chars, max_duration, max_pause)
+                    return self._srt_from_words(words, max_chars, max_duration, max_pause)
 
         if utterances:
-            return self._srt_from_utterances(utterances, line_width)
+            return self._srt_from_utterances(utterances)
 
         transcript = results.get("transcripts") or []
         if transcript:
-            return self._srt_from_text(transcript[0].get("transcript", ""), line_width)
+            return self._srt_from_text(transcript[0].get("transcript", ""))
 
         return ""
 
@@ -648,13 +632,12 @@ class DeepgramSubtitleGUI:
                 return True
         return False
 
-    def _srt_from_utterances(self, utterances: list, line_width: int) -> str:
+    def _srt_from_utterances(self, utterances: list) -> str:
         lines = []
         for index, utterance in enumerate(utterances, start=1):
             start = utterance.get("start", 0)
             end = utterance.get("end", 0)
             transcript = utterance.get("transcript", "").strip()
-            transcript = textwrap.fill(transcript, width=line_width)
             lines.append(
                 f"{index}\n{self._format_timestamp(start)} --> {self._format_timestamp(end)}\n{transcript}\n"
             )
@@ -663,7 +646,6 @@ class DeepgramSubtitleGUI:
     def _srt_from_words(
         self,
         words: list,
-        line_width: int,
         max_chars: int,
         max_duration: float,
         max_pause: float,
@@ -687,14 +669,14 @@ class DeepgramSubtitleGUI:
 
         lines = []
         for index, seg in enumerate(segments, start=1):
-            transcript = textwrap.fill(seg["text"].strip(), width=line_width)
+            transcript = seg["text"].strip()
             lines.append(
                 f"{index}\n{self._format_timestamp(seg['start'])} --> {self._format_timestamp(seg['end'])}\n{transcript}\n"
             )
         return "\n".join(lines)
 
-    def _srt_from_text(self, text: str, line_width: int) -> str:
-        transcript = textwrap.fill(text.strip(), width=line_width)
+    def _srt_from_text(self, text: str) -> str:
+        transcript = text.strip()
         return f"1\n00:00:00,000 --> 00:00:10,000\n{transcript}\n"
 
     def _format_timestamp(self, seconds: float) -> str:
