@@ -257,6 +257,8 @@ class DeepgramSubtitleGUI:
     def clear_api_key(self) -> None:
         self.api_key_var.set("")
         self.api_key_combo.set("")
+        self.api_key_history.clear()
+        self._update_api_key_combo()
 
     def remove_selected_api_key(self) -> None:
         selected = self.api_key_var.get().strip()
