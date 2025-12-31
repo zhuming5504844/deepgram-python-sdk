@@ -99,7 +99,6 @@ class DeepgramSubtitleGUI:
         self.line_width_var = tk.IntVar(value=42)
         self.timeout_seconds_var = tk.IntVar(value=300)
         self.max_retries_var = tk.IntVar(value=2)
-        self.api_key_select_var = tk.StringVar(value="")
         self.api_key_history: list[str] = []
 
         row = 0
@@ -180,18 +179,15 @@ class DeepgramSubtitleGUI:
         api_frame.grid(row=row, column=1, sticky="ew", padx=4, pady=2)
         api_frame.columnconfigure(0, weight=1)
 
-        tk.Entry(api_frame, textvariable=self.api_key_var).grid(row=0, column=0, sticky="ew")
-        tk.Button(api_frame, text="粘贴", command=self.paste_api_key).grid(row=0, column=1, padx=4)
-        tk.Button(api_frame, text="导入", command=self.import_api_key).grid(row=0, column=2, padx=4)
         self.api_key_combo = ttk.Combobox(
             api_frame,
-            textvariable=self.api_key_select_var,
+            textvariable=self.api_key_var,
             values=self.api_key_history,
-            state="readonly",
-            width=24,
         )
-        self.api_key_combo.grid(row=0, column=3, padx=4)
+        self.api_key_combo.grid(row=0, column=0, sticky="ew")
         self.api_key_combo.bind("<<ComboboxSelected>>", self._on_api_key_selected)
+        tk.Button(api_frame, text="粘贴", command=self.paste_api_key).grid(row=0, column=1, padx=4)
+        tk.Button(api_frame, text="导入", command=self.import_api_key).grid(row=0, column=2, padx=4)
         return row + 1
 
     def _add_language_dropdown(self, parent: tk.Widget, row: int) -> int:
@@ -281,13 +277,12 @@ class DeepgramSubtitleGUI:
     def _update_api_key_combo(self) -> None:
         if hasattr(self, "api_key_combo"):
             self.api_key_combo["values"] = self.api_key_history
-            if self.api_key_var.get() in self.api_key_history:
-                self.api_key_select_var.set(self.api_key_var.get())
 
     def _on_api_key_selected(self, event: tk.Event) -> None:
-        selected = self.api_key_select_var.get().strip()
+        selected = self.api_key_var.get().strip()
         if selected:
-            self.api_key_var.set(selected)
+            self._add_api_key_to_history(selected)
+            self._update_api_key_combo()
 
     def start_transcription(self) -> None:
         path = self.audio_path.get().strip()
