@@ -281,11 +281,11 @@ class DeepgramSubtitleGUI:
             if line.startswith("DEEPGRAM_API_KEY"):
                 _, value = line.split("=", 1)
                 candidate = value.strip().strip("'").strip('"')
-                if self._is_valid_api_key(candidate):
+                if candidate:
                     keys.append(candidate)
                 continue
             for token in line.replace(",", " ").split():
-                if self._is_valid_api_key(token):
+                if token:
                     keys.append(token)
         return list(dict.fromkeys(keys))
 
@@ -305,11 +305,10 @@ class DeepgramSubtitleGUI:
         self._update_api_key_combo()
 
     def _add_api_key_to_history(self, key: str) -> None:
-        if not self._is_valid_api_key(key):
+        if not key:
             return
-        if key in self.api_key_history:
-            self.api_key_history.remove(key)
-        self.api_key_history.insert(0, key)
+        if key not in self.api_key_history:
+            self.api_key_history.append(key)
 
     def _update_api_key_combo(self) -> None:
         if hasattr(self, "api_key_combo"):
@@ -318,14 +317,8 @@ class DeepgramSubtitleGUI:
     def _on_api_key_selected(self, event: tk.Event) -> None:
         selected = self.api_key_var.get().strip()
         if selected:
-            if self._is_valid_api_key(selected):
-                self._add_api_key_to_history(selected)
-                self._update_api_key_combo()
-            else:
-                messagebox.showwarning("提示", "API Key 必须是 40 位十六进制字符串。")
-
-    def _is_valid_api_key(self, key: str) -> bool:
-        return len(key) == 40 and all(char in "0123456789abcdef" for char in key.lower())
+            self._add_api_key_to_history(selected)
+            self._update_api_key_combo()
 
     def start_transcription(self) -> None:
         path = self.audio_path.get().strip()
