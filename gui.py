@@ -230,7 +230,7 @@ class DeepgramSubtitleGUI:
             messagebox.showwarning("提示", "剪贴板为空或无法读取。")
             return
         if key:
-            self._set_api_key(key)
+            self._set_api_keys_from_text(key)
 
     def import_api_key(self) -> None:
         filename = filedialog.askopenfilename(
@@ -246,29 +246,46 @@ class DeepgramSubtitleGUI:
             messagebox.showerror("错误", f"读取失败: {exc}")
             return
 
-        key = self._extract_api_key(content)
-        if not key:
+        keys = self._extract_api_keys(content)
+        if not keys:
             messagebox.showwarning("提示", "未找到有效的 API Key。")
             return
-        self._set_api_key(key)
+        self._set_api_keys(keys)
 
-    def _extract_api_key(self, content: str) -> str:
+    def _extract_api_keys(self, content: str) -> list[str]:
+        keys: list[str] = []
         for line in content.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             if line.startswith("DEEPGRAM_API_KEY"):
                 _, value = line.split("=", 1)
-                return value.strip().strip("'").strip('"')
-        return content.splitlines()[0].strip() if content else ""
+                candidate = value.strip().strip("'").strip('"')
+                if self._is_valid_api_key(candidate):
+                    keys.append(candidate)
+                continue
+            for token in line.replace(",", " ").split():
+                if self._is_valid_api_key(token):
+                    keys.append(token)
+        return list(dict.fromkeys(keys))
 
-    def _set_api_key(self, key: str) -> None:
-        self.api_key_var.set(key)
-        self._add_api_key_to_history(key)
+    def _set_api_keys_from_text(self, text: str) -> None:
+        keys = self._extract_api_keys(text)
+        if not keys:
+            messagebox.showwarning("提示", "未找到有效的 API Key。")
+            return
+        self._set_api_keys(keys)
+
+    def _set_api_keys(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        for key in keys:
+            self._add_api_key_to_history(key)
+        self.api_key_var.set(keys[0])
         self._update_api_key_combo()
 
     def _add_api_key_to_history(self, key: str) -> None:
-        if not key:
+        if not self._is_valid_api_key(key):
             return
         if key in self.api_key_history:
             self.api_key_history.remove(key)
@@ -281,8 +298,14 @@ class DeepgramSubtitleGUI:
     def _on_api_key_selected(self, event: tk.Event) -> None:
         selected = self.api_key_var.get().strip()
         if selected:
-            self._add_api_key_to_history(selected)
-            self._update_api_key_combo()
+            if self._is_valid_api_key(selected):
+                self._add_api_key_to_history(selected)
+                self._update_api_key_combo()
+            else:
+                messagebox.showwarning("提示", "API Key 必须是 40 位十六进制字符串。")
+
+    def _is_valid_api_key(self, key: str) -> bool:
+        return len(key) == 40 and all(char in "0123456789abcdef" for char in key.lower())
 
     def start_transcription(self) -> None:
         path = self.audio_path.get().strip()
