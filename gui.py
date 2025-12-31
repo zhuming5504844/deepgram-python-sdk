@@ -188,6 +188,8 @@ class DeepgramSubtitleGUI:
         self.api_key_combo.bind("<<ComboboxSelected>>", self._on_api_key_selected)
         tk.Button(api_frame, text="粘贴", command=self.paste_api_key).grid(row=0, column=1, padx=4)
         tk.Button(api_frame, text="导入", command=self.import_api_key).grid(row=0, column=2, padx=4)
+        tk.Button(api_frame, text="清空", command=self.clear_api_key).grid(row=0, column=3, padx=4)
+        tk.Button(api_frame, text="删除当前", command=self.remove_selected_api_key).grid(row=0, column=4, padx=4)
         return row + 1
 
     def _add_language_dropdown(self, parent: tk.Widget, row: int) -> int:
@@ -251,6 +253,19 @@ class DeepgramSubtitleGUI:
             messagebox.showwarning("提示", "未找到有效的 API Key。")
             return
         self._set_api_keys(keys)
+
+    def clear_api_key(self) -> None:
+        self.api_key_var.set("")
+        self.api_key_combo.set("")
+
+    def remove_selected_api_key(self) -> None:
+        selected = self.api_key_var.get().strip()
+        if not selected:
+            return
+        if selected in self.api_key_history:
+            self.api_key_history.remove(selected)
+        self.api_key_var.set(self.api_key_history[0] if self.api_key_history else "")
+        self._update_api_key_combo()
 
     def _extract_api_keys(self, content: str) -> list[str]:
         keys: list[str] = []
