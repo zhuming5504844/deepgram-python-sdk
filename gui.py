@@ -78,7 +78,7 @@ class DeepgramSubtitleGUI:
         options_frame = tk.LabelFrame(self.root, text="转录参数 (全参数)")
         options_frame.pack(fill=tk.BOTH, padx=12, pady=8, expand=True)
 
-        self.api_key_var = tk.StringVar(value=os.getenv("DEEPGRAM_API_KEY", ""))
+        self.api_key_var = tk.StringVar(value="")
         self.model_var = tk.StringVar(value="nova-3")
         self.language_var = tk.StringVar(value="自动(检测)")
         self.detect_language_var = tk.BooleanVar(value=False)
