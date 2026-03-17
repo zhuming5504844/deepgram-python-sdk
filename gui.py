@@ -85,11 +85,6 @@ class DeepgramSubtitleGUI:
         top_frame.pack(fill=tk.X, padx=12, pady=8)
 
         tk.Label(top_frame, text="音频文件").pack(anchor="w")
-        file_row = tk.Frame(top_frame)
-        file_row.pack(fill=tk.X, pady=4)
-
-        self.file_entry = tk.Entry(file_row, textvariable=self.audio_path)
-        self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         queue_frame = tk.Frame(top_frame)
         queue_frame.pack(fill=tk.BOTH, pady=(4, 0), expand=True)
@@ -251,8 +246,8 @@ class DeepgramSubtitleGUI:
     def _setup_drag_and_drop(self) -> None:
         from tkinterdnd2 import DND_FILES
 
-        self.file_entry.drop_target_register(DND_FILES)
-        self.file_entry.dnd_bind("<<Drop>>", self.handle_drop)
+        self.queue_listbox.drop_target_register(DND_FILES)
+        self.queue_listbox.dnd_bind("<<Drop>>", self.handle_drop)
 
     def select_files(self) -> None:
         filetypes = (
