@@ -200,7 +200,14 @@ class DeepgramSubtitleGUI:
 
         actions_frame = tk.Frame(self.root)
         actions_frame.pack(fill=tk.X, padx=12, pady=(0, 4))
-        tk.Button(actions_frame, text="开始转录", command=self.start_transcription).pack(anchor="w")
+        tk.Button(
+            actions_frame,
+            text="开始转录",
+            command=self.start_transcription,
+            width=14,
+            height=2,
+            font=("微软雅黑", 11, "bold"),
+        ).pack(anchor="w", pady=(4, 6))
 
         output_frame = tk.LabelFrame(self.root, text="日志")
         output_frame.pack(fill=tk.BOTH, padx=12, pady=8, expand=True)
