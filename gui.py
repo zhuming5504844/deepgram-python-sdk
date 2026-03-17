@@ -66,7 +66,7 @@ class DeepgramSubtitleGUI:
         self.root = root
         self.dnd_available = dnd_available
         self.root.title("Deepgram 字幕转录 (拖放音频)")
-        self.root.geometry("900x720")
+        self.root.geometry("900x780")
 
         self.audio_path = tk.StringVar()
         self.status_text = tk.StringVar(value="准备就绪")
@@ -212,7 +212,7 @@ class DeepgramSubtitleGUI:
         output_frame = tk.LabelFrame(self.root, text="日志")
         output_frame.pack(fill=tk.BOTH, padx=12, pady=8, expand=True)
 
-        self.log_output = scrolledtext.ScrolledText(output_frame, height=10)
+        self.log_output = scrolledtext.ScrolledText(output_frame, height=16)
         self.log_output.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         status_bar = tk.Label(self.root, textvariable=self.status_text, anchor="w")
