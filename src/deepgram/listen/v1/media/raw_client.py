@@ -2,6 +2,7 @@
 
 import typing
 from json.decoder import JSONDecodeError
+from pathlib import Path
 
 from ....core.api_error import ApiError
 from ....core.client_wrapper import AsyncClientWrapper, SyncClientWrapper
@@ -20,6 +21,49 @@ from .types.media_transcribe_response import MediaTranscribeResponse
 
 # this is used as the default value for optional parameters
 OMIT = typing.cast(typing.Any, ...)
+
+_COMMON_AUDIO_CONTENT_TYPES: typing.Dict[str, str] = {
+    "wav": "audio/wav",
+    "wave": "audio/wav",
+    "mp3": "audio/mpeg",
+    "mpeg": "audio/mpeg",
+    "mp4": "audio/mp4",
+    "m4a": "audio/mp4",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+    "ogg": "audio/ogg",
+    "opus": "audio/opus",
+    "webm": "audio/webm",
+}
+
+
+def _get_audio_content_type(
+    *,
+    request: typing.Union[bytes, typing.Iterator[bytes], typing.AsyncIterator[bytes], str, Path],
+    audio_format: typing.Optional[str],
+    content_type: typing.Optional[str],
+) -> str:
+    if content_type:
+        return content_type
+
+    extension = audio_format
+    if extension is None and isinstance(request, (str, Path)):
+        extension = Path(request).suffix.lstrip(".")
+
+    if extension:
+        normalized = extension.casefold().lstrip(".")
+        return _COMMON_AUDIO_CONTENT_TYPES.get(normalized, "application/octet-stream")
+
+    return "application/octet-stream"
+
+
+def _normalize_audio_request(
+    request: typing.Union[bytes, typing.Iterator[bytes], typing.AsyncIterator[bytes], str, Path],
+) -> typing.Union[bytes, typing.Iterator[bytes], typing.AsyncIterator[bytes]]:
+    if isinstance(request, (str, Path)):
+        return Path(request).read_bytes()
+
+    return request
 
 
 class RawMediaClient:
@@ -271,7 +315,7 @@ class RawMediaClient:
     def transcribe_file(
         self,
         *,
-        request: typing.Union[bytes, typing.Iterator[bytes], typing.AsyncIterator[bytes]],
+        request: typing.Union[bytes, typing.Iterator[bytes], typing.AsyncIterator[bytes], str, Path],
         callback: typing.Optional[str] = None,
         callback_method: typing.Optional[MediaTranscribeRequestCallbackMethod] = None,
         extra: typing.Optional[typing.Union[str, typing.Sequence[str]]] = None,
@@ -308,6 +352,8 @@ class RawMediaClient:
         utt_split: typing.Optional[float] = None,
         version: typing.Optional[MediaTranscribeRequestVersion] = None,
         mip_opt_out: typing.Optional[bool] = None,
+        audio_format: typing.Optional[str] = None,
+        content_type: typing.Optional[str] = None,
         request_options: typing.Optional[RequestOptions] = None,
     ) -> HttpResponse[MediaTranscribeResponse]:
         """
@@ -433,6 +479,13 @@ class RawMediaClient:
         HttpResponse[MediaTranscribeResponse]
             Returns either transcription results, or a request_id when using a callback.
         """
+        normalized_request = _normalize_audio_request(request)
+        resolved_content_type = _get_audio_content_type(
+            request=request,
+            audio_format=audio_format,
+            content_type=content_type,
+        )
+
         _response = self._client_wrapper.httpx_client.request(
             "v1/listen",
             base_url=self._client_wrapper.get_environment().base,
@@ -475,9 +528,9 @@ class RawMediaClient:
                 "version": version,
                 "mip_opt_out": mip_opt_out,
             },
-            content=request,
+            content=normalized_request,
             headers={
-                "content-type": "application/octet-stream",
+                "content-type": resolved_content_type,
             },
             request_options=request_options,
             omit=OMIT,
@@ -758,7 +811,7 @@ class AsyncRawMediaClient:
     async def transcribe_file(
         self,
         *,
-        request: typing.Union[bytes, typing.Iterator[bytes], typing.AsyncIterator[bytes]],
+        request: typing.Union[bytes, typing.Iterator[bytes], typing.AsyncIterator[bytes], str, Path],
         callback: typing.Optional[str] = None,
         callback_method: typing.Optional[MediaTranscribeRequestCallbackMethod] = None,
         extra: typing.Optional[typing.Union[str, typing.Sequence[str]]] = None,
@@ -795,6 +848,8 @@ class AsyncRawMediaClient:
         utt_split: typing.Optional[float] = None,
         version: typing.Optional[MediaTranscribeRequestVersion] = None,
         mip_opt_out: typing.Optional[bool] = None,
+        audio_format: typing.Optional[str] = None,
+        content_type: typing.Optional[str] = None,
         request_options: typing.Optional[RequestOptions] = None,
     ) -> AsyncHttpResponse[MediaTranscribeResponse]:
         """
@@ -920,6 +975,13 @@ class AsyncRawMediaClient:
         AsyncHttpResponse[MediaTranscribeResponse]
             Returns either transcription results, or a request_id when using a callback.
         """
+        normalized_request = _normalize_audio_request(request)
+        resolved_content_type = _get_audio_content_type(
+            request=request,
+            audio_format=audio_format,
+            content_type=content_type,
+        )
+
         _response = await self._client_wrapper.httpx_client.request(
             "v1/listen",
             base_url=self._client_wrapper.get_environment().base,
@@ -962,9 +1024,9 @@ class AsyncRawMediaClient:
                 "version": version,
                 "mip_opt_out": mip_opt_out,
             },
-            content=request,
+            content=normalized_request,
             headers={
-                "content-type": "application/octet-stream",
+                "content-type": resolved_content_type,
             },
             request_options=request_options,
             omit=OMIT,

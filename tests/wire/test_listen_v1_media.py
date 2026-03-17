@@ -94,3 +94,19 @@ def test_listen_v1_media_transcribe_file() -> None:
     client = get_client(test_id)
     client.listen.v1.media.transcribe_file(request=b"test audio data")
     verify_request_count(test_id, "POST", "/v1/listen", None, 1)
+
+
+def test_listen_v1_media_transcribe_file_with_audio_format() -> None:
+    """Test transcribeFile accepts audio_format parameter."""
+    test_id = "listen.v1.media.transcribe_file.0"
+    client = get_client(test_id)
+    client.listen.v1.media.transcribe_file(request=b"test audio data", audio_format="mp3")
+    verify_request_count(test_id, "POST", "/v1/listen", None, 1)
+
+
+def test_listen_v1_media_transcribe_file_with_file_path() -> None:
+    """Test transcribeFile accepts a local audio file path."""
+    test_id = "listen.v1.media.transcribe_file.0"
+    client = get_client(test_id)
+    client.listen.v1.media.transcribe_file(request="tests/manual/fixtures/audio.wav")
+    verify_request_count(test_id, "POST", "/v1/listen", None, 1)
