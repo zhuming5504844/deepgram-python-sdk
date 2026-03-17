@@ -1,5 +1,7 @@
+import inspect
 import json
 import os
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -487,7 +489,7 @@ class DeepgramSubtitleGUI:
             params = self._build_params(options)
             self.log(f"请求参数: {json.dumps(params, ensure_ascii=False)}")
 
-            response = client.listen.v1.media.transcribe_file(request=audio_data, **params)
+            response = self._transcribe_with_retry(client, audio_data, params, options.max_retries)
             response_dict = self._response_to_dict(response)
             if response_dict.get("results") is None:
                 response_dict = self._poll_transcription_result(response_dict, options.api_key)
@@ -500,6 +502,69 @@ class DeepgramSubtitleGUI:
             self.log(f"转录完成，已保存字幕: {output_path}")
         except Exception as exc:
             raise RuntimeError(f"{path}: {exc}") from exc
+
+    def _transcribe_with_retry(self, client: DeepgramClient, audio_data: bytes, params: dict, max_retries: int) -> object:
+        retry_count = max(0, max_retries)
+        last_error: Exception | None = None
+
+        for attempt in range(retry_count + 1):
+            try:
+                return self._transcribe_with_sdk_compat(client, audio_data, params)
+            except Exception as exc:
+                if attempt >= retry_count or not self._is_retryable_network_error(exc):
+                    raise
+                last_error = exc
+                wait_seconds = min(8, 2 ** attempt)
+                self.log(
+                    f"网络异常，准备重试 ({attempt + 1}/{retry_count})，{wait_seconds}s 后再次尝试: {exc}"
+                )
+                time.sleep(wait_seconds)
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("未知错误：转录重试流程未返回结果。")
+
+    def _transcribe_with_sdk_compat(self, client: DeepgramClient, audio_data: bytes, params: dict) -> object:
+        """兼容 Deepgram SDK 新旧接口的 transcribe_file 调用方式。"""
+        transcribe_method = client.listen.v1.media.transcribe_file
+
+        call_variants = [
+            lambda: transcribe_method(request=audio_data, **params),
+            lambda: transcribe_method(audio_data, **params),
+            lambda: transcribe_method(request={"buffer": audio_data}, **params),
+            lambda: transcribe_method({"buffer": audio_data}, **params),
+        ]
+
+        call_errors: list[str] = []
+        for call in call_variants:
+            try:
+                return call()
+            except TypeError as exc:
+                call_errors.append(str(exc))
+
+        method_signature = inspect.signature(transcribe_method)
+        raise TypeError(
+            "无法匹配当前 Deepgram SDK 的 transcribe_file 接口。"
+            f"签名: {method_signature}; 最近错误: {call_errors[-1] if call_errors else 'unknown'}"
+        )
+
+    def _is_retryable_network_error(self, exc: Exception) -> bool:
+        retryable_exceptions = (TimeoutError, socket.timeout, OSError)
+        if isinstance(exc, retryable_exceptions):
+            return True
+
+        text = str(exc).lower()
+        retryable_markers = (
+            "10060",
+            "timed out",
+            "timeout",
+            "temporarily unavailable",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "network is unreachable",
+        )
+        return any(marker in text for marker in retryable_markers)
 
     def _poll_transcription_result(self, response: dict, api_key: str) -> dict:
         request_id = response.get("request_id") or response.get("metadata", {}).get("request_id")
@@ -658,6 +723,8 @@ class DeepgramSubtitleGUI:
             self.log(f"保存设置失败: {exc}")
 
     def _response_to_dict(self, response: object) -> dict:
+        if hasattr(response, "model_dump"):
+            return response.model_dump()  # type: ignore[no-any-return]
         if hasattr(response, "dict"):
             return response.dict()  # type: ignore[no-any-return]
         if isinstance(response, dict):
