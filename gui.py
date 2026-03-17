@@ -103,16 +103,26 @@ class DeepgramSubtitleGUI:
         checkbox_frame.grid(row=row, column=0, columnspan=2, sticky="w", pady=6)
         row += 1
 
-        self._add_checkbox(checkbox_frame, "自动识别语言", self.detect_language_var)
-        self._add_checkbox(checkbox_frame, "字词级时间戳", self.word_timestamps_var)
-        self._add_checkbox(checkbox_frame, "标点", self.punctuate_var)
-        self._add_checkbox(checkbox_frame, "智能格式化", self.smart_format_var)
-        self._add_checkbox(checkbox_frame, "按话语分段(utterances)", self.utterances_var)
-        self._add_checkbox(checkbox_frame, "说话人区分", self.diarize_var)
-        self._add_checkbox(checkbox_frame, "数字转写", self.numerals_var)
-        self._add_checkbox(checkbox_frame, "填充词(filler)", self.filler_words_var)
-        self._add_checkbox(checkbox_frame, "敏感词过滤", self.profanity_filter_var)
-        self._add_checkbox(checkbox_frame, "段落(paragraphs)", self.paragraphs_var)
+        checkboxes = [
+            ("自动识别语言", self.detect_language_var),
+            ("字词级时间戳", self.word_timestamps_var),
+            ("标点", self.punctuate_var),
+            ("智能格式化", self.smart_format_var),
+            ("按话语分段(utterances)", self.utterances_var),
+            ("说话人区分", self.diarize_var),
+            ("数字转写", self.numerals_var),
+            ("填充词(filler)", self.filler_words_var),
+            ("敏感词过滤", self.profanity_filter_var),
+            ("段落(paragraphs)", self.paragraphs_var),
+        ]
+        for index, (label, variable) in enumerate(checkboxes):
+            tk.Checkbutton(checkbox_frame, text=label, variable=variable).grid(
+                row=index // 5,
+                column=index % 5,
+                sticky="w",
+                padx=(0, 12),
+                pady=2,
+            )
 
         tk.Label(options_frame, text="每段最大字符数").grid(
             row=row, column=0, sticky="w", padx=4, pady=(6, 2)
@@ -198,8 +208,6 @@ class DeepgramSubtitleGUI:
         combo.set(self.language_var.get() or language_values[0])
         return row + 1
 
-    def _add_checkbox(self, parent: tk.Widget, label: str, variable: tk.BooleanVar) -> None:
-        tk.Checkbutton(parent, text=label, variable=variable).pack(side=tk.LEFT, padx=6)
 
     def _setup_drag_and_drop(self) -> None:
         from tkinterdnd2 import DND_FILES
