@@ -28,13 +28,6 @@ class TranscriptionOptions:
     filler_words: bool
     profanity_filter: bool
     paragraphs: bool
-    keywords: str
-    search: str
-    replace: str
-    tag: str
-    redact: str
-    summarize: str
-    extra_json: str
     max_chars: int
     max_duration: float
     max_pause: float
@@ -93,13 +86,6 @@ class DeepgramSubtitleGUI:
         self.filler_words_var = tk.BooleanVar(value=False)
         self.profanity_filter_var = tk.BooleanVar(value=False)
         self.paragraphs_var = tk.BooleanVar(value=False)
-        self.keywords_var = tk.StringVar(value="")
-        self.search_var = tk.StringVar(value="")
-        self.replace_var = tk.StringVar(value="")
-        self.tag_var = tk.StringVar(value="")
-        self.redact_var = tk.StringVar(value="")
-        self.summarize_var = tk.StringVar(value="")
-        self.extra_json_var = tk.StringVar(value="{}")
         self.max_chars_var = tk.IntVar(value=16)
         self.max_duration_var = tk.DoubleVar(value=6.0)
         self.max_pause_var = tk.DoubleVar(value=1.0)
@@ -117,31 +103,26 @@ class DeepgramSubtitleGUI:
         checkbox_frame.grid(row=row, column=0, columnspan=2, sticky="w", pady=6)
         row += 1
 
-        self._add_checkbox(checkbox_frame, "自动识别语言", self.detect_language_var)
-        self._add_checkbox(checkbox_frame, "字词级时间戳", self.word_timestamps_var)
-        self._add_checkbox(checkbox_frame, "标点", self.punctuate_var)
-        self._add_checkbox(checkbox_frame, "智能格式化", self.smart_format_var)
-        self._add_checkbox(checkbox_frame, "按话语分段(utterances)", self.utterances_var)
-        self._add_checkbox(checkbox_frame, "说话人区分", self.diarize_var)
-        self._add_checkbox(checkbox_frame, "数字转写", self.numerals_var)
-        self._add_checkbox(checkbox_frame, "填充词(filler)", self.filler_words_var)
-        self._add_checkbox(checkbox_frame, "敏感词过滤", self.profanity_filter_var)
-        self._add_checkbox(checkbox_frame, "段落(paragraphs)", self.paragraphs_var)
-
-        row = self._add_labeled_entry(options_frame, row, "关键词(keywords, 逗号分隔)", self.keywords_var)
-        row = self._add_labeled_entry(options_frame, row, "搜索(search, 逗号分隔)", self.search_var)
-        row = self._add_labeled_entry(options_frame, row, "替换(replace, 逗号分隔)", self.replace_var)
-        row = self._add_labeled_entry(options_frame, row, "标签(tag)", self.tag_var)
-        row = self._add_labeled_entry(options_frame, row, "敏感替换(redact)", self.redact_var)
-        row = self._add_labeled_entry(options_frame, row, "摘要(summarize)", self.summarize_var)
-
-        tk.Label(options_frame, text="额外参数(JSON, 覆盖上方设置)").grid(
-            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
-        )
-        row += 1
-        extra_entry = tk.Entry(options_frame, textvariable=self.extra_json_var)
-        extra_entry.grid(row=row, column=0, columnspan=2, sticky="ew", padx=4)
-        row += 1
+        checkboxes = [
+            ("自动识别语言", self.detect_language_var),
+            ("字词级时间戳", self.word_timestamps_var),
+            ("标点", self.punctuate_var),
+            ("智能格式化", self.smart_format_var),
+            ("按话语分段(utterances)", self.utterances_var),
+            ("说话人区分", self.diarize_var),
+            ("数字转写", self.numerals_var),
+            ("填充词(filler)", self.filler_words_var),
+            ("敏感词过滤", self.profanity_filter_var),
+            ("段落(paragraphs)", self.paragraphs_var),
+        ]
+        for index, (label, variable) in enumerate(checkboxes):
+            tk.Checkbutton(checkbox_frame, text=label, variable=variable).grid(
+                row=index // 5,
+                column=index % 5,
+                sticky="w",
+                padx=(0, 12),
+                pady=2,
+            )
 
         tk.Label(options_frame, text="每段最大字符数").grid(
             row=row, column=0, sticky="w", padx=4, pady=(6, 2)
@@ -227,8 +208,6 @@ class DeepgramSubtitleGUI:
         combo.set(self.language_var.get() or language_values[0])
         return row + 1
 
-    def _add_checkbox(self, parent: tk.Widget, label: str, variable: tk.BooleanVar) -> None:
-        tk.Checkbutton(parent, text=label, variable=variable).pack(side=tk.LEFT, padx=6)
 
     def _setup_drag_and_drop(self) -> None:
         from tkinterdnd2 import DND_FILES
@@ -367,13 +346,6 @@ class DeepgramSubtitleGUI:
             filler_words=self.filler_words_var.get(),
             profanity_filter=self.profanity_filter_var.get(),
             paragraphs=self.paragraphs_var.get(),
-            keywords=self.keywords_var.get().strip(),
-            search=self.search_var.get().strip(),
-            replace=self.replace_var.get().strip(),
-            tag=self.tag_var.get().strip(),
-            redact=self.redact_var.get().strip(),
-            summarize=self.summarize_var.get().strip(),
-            extra_json=self.extra_json_var.get().strip() or "{}",
             max_chars=int(self.max_chars_var.get()),
             max_duration=float(self.max_duration_var.get()),
             max_pause=float(self.max_pause_var.get()),
@@ -439,23 +411,7 @@ class DeepgramSubtitleGUI:
         }
         params["request_options"] = request_options
 
-        if options.keywords:
-            params["keywords"] = [item.strip() for item in options.keywords.split(",") if item.strip()]
-        if options.search:
-            params["search"] = [item.strip() for item in options.search.split(",") if item.strip()]
-        if options.replace:
-            params["replace"] = [item.strip() for item in options.replace.split(",") if item.strip()]
-        if options.tag:
-            params["tag"] = [item.strip() for item in options.tag.split(",") if item.strip()]
-        if options.redact:
-            params["redact"] = options.redact
-        if options.summarize:
-            params["summarize"] = options.summarize
-
         params = {key: value for key, value in params.items() if value is not None}
-
-        extra_params = self._parse_extra_json(options.extra_json)
-        params.update(extra_params)
         return params
 
     def _language_options(self) -> dict:
@@ -511,13 +467,6 @@ class DeepgramSubtitleGUI:
         self.filler_words_var.set(data.get("filler_words", self.filler_words_var.get()))
         self.profanity_filter_var.set(data.get("profanity_filter", self.profanity_filter_var.get()))
         self.paragraphs_var.set(data.get("paragraphs", self.paragraphs_var.get()))
-        self.keywords_var.set(data.get("keywords", self.keywords_var.get()))
-        self.search_var.set(data.get("search", self.search_var.get()))
-        self.replace_var.set(data.get("replace", self.replace_var.get()))
-        self.tag_var.set(data.get("tag", self.tag_var.get()))
-        self.redact_var.set(data.get("redact", self.redact_var.get()))
-        self.summarize_var.set(data.get("summarize", self.summarize_var.get()))
-        self.extra_json_var.set(data.get("extra_json", self.extra_json_var.get()))
         self.max_chars_var.set(int(data.get("max_chars", self.max_chars_var.get())))
         self.max_duration_var.set(float(data.get("max_duration", self.max_duration_var.get())))
         self.max_pause_var.set(float(data.get("max_pause", self.max_pause_var.get())))
@@ -546,13 +495,6 @@ class DeepgramSubtitleGUI:
             "filler_words": self.filler_words_var.get(),
             "profanity_filter": self.profanity_filter_var.get(),
             "paragraphs": self.paragraphs_var.get(),
-            "keywords": self.keywords_var.get().strip(),
-            "search": self.search_var.get().strip(),
-            "replace": self.replace_var.get().strip(),
-            "tag": self.tag_var.get().strip(),
-            "redact": self.redact_var.get().strip(),
-            "summarize": self.summarize_var.get().strip(),
-            "extra_json": self.extra_json_var.get().strip(),
             "max_chars": int(self.max_chars_var.get()),
             "max_duration": float(self.max_duration_var.get()),
             "max_pause": float(self.max_pause_var.get()),
@@ -565,17 +507,6 @@ class DeepgramSubtitleGUI:
                 json.dump(data, settings_file, ensure_ascii=False, indent=2)
         except OSError as exc:
             self.log(f"保存设置失败: {exc}")
-
-    def _parse_extra_json(self, raw: str) -> dict:
-        if not raw:
-            return {}
-        try:
-            data = json.loads(raw)
-            if not isinstance(data, dict):
-                raise ValueError("额外参数必须是 JSON 对象")
-            return data
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"额外参数 JSON 解析失败: {exc}") from exc
 
     def _response_to_dict(self, response: object) -> dict:
         if hasattr(response, "dict"):
