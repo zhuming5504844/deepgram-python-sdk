@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import threading
@@ -487,7 +488,7 @@ class DeepgramSubtitleGUI:
             params = self._build_params(options)
             self.log(f"请求参数: {json.dumps(params, ensure_ascii=False)}")
 
-            response = client.listen.v1.media.transcribe_file(request=audio_data, **params)
+            response = self._transcribe_with_sdk_compat(client, audio_data, params)
             response_dict = self._response_to_dict(response)
             if response_dict.get("results") is None:
                 response_dict = self._poll_transcription_result(response_dict, options.api_key)
@@ -500,6 +501,30 @@ class DeepgramSubtitleGUI:
             self.log(f"转录完成，已保存字幕: {output_path}")
         except Exception as exc:
             raise RuntimeError(f"{path}: {exc}") from exc
+
+    def _transcribe_with_sdk_compat(self, client: DeepgramClient, audio_data: bytes, params: dict) -> object:
+        """兼容 Deepgram SDK 新旧接口的 transcribe_file 调用方式。"""
+        transcribe_method = client.listen.v1.media.transcribe_file
+
+        call_variants = [
+            lambda: transcribe_method(request=audio_data, **params),
+            lambda: transcribe_method(audio_data, **params),
+            lambda: transcribe_method(request={"buffer": audio_data}, **params),
+            lambda: transcribe_method({"buffer": audio_data}, **params),
+        ]
+
+        call_errors: list[str] = []
+        for call in call_variants:
+            try:
+                return call()
+            except TypeError as exc:
+                call_errors.append(str(exc))
+
+        method_signature = inspect.signature(transcribe_method)
+        raise TypeError(
+            "无法匹配当前 Deepgram SDK 的 transcribe_file 接口。"
+            f"签名: {method_signature}; 最近错误: {call_errors[-1] if call_errors else 'unknown'}"
+        )
 
     def _poll_transcription_result(self, response: dict, api_key: str) -> dict:
         request_id = response.get("request_id") or response.get("metadata", {}).get("request_id")
@@ -658,6 +683,8 @@ class DeepgramSubtitleGUI:
             self.log(f"保存设置失败: {exc}")
 
     def _response_to_dict(self, response: object) -> dict:
+        if hasattr(response, "model_dump"):
+            return response.model_dump()  # type: ignore[no-any-return]
         if hasattr(response, "dict"):
             return response.dict()  # type: ignore[no-any-return]
         if isinstance(response, dict):
