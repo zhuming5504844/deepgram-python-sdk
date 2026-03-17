@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -17,6 +18,7 @@ from deepgram.core import RequestOptions
 
 POLL_INTERVAL_SECONDS = 2
 POLL_TIMEOUT_SECONDS = 300
+BATCH_PARALLEL_JOBS = 3
 SUPPORTED_AUDIO_EXTENSIONS = (
     ".wav",
     ".mp3",
@@ -446,15 +448,23 @@ class DeepgramSubtitleGUI:
 
     def transcribe_files(self, paths: list[str], options: TranscriptionOptions) -> None:
         total = len(paths)
+        completed = 0
         failed = 0
-        for index, path in enumerate(paths, start=1):
-            self.status_text.set(f"转录中 ({index}/{total})...")
-            self.log(f"[{index}/{total}] 开始处理: {path}")
-            try:
-                self._transcribe_single_file(path, options)
-            except Exception as exc:
-                failed += 1
-                self.log(f"[{index}/{total}] 转录失败: {exc}")
+
+        self.log(f"批量模式已启用，并发任务数: {BATCH_PARALLEL_JOBS}")
+
+        with ThreadPoolExecutor(max_workers=BATCH_PARALLEL_JOBS) as executor:
+            future_to_path = {executor.submit(self._transcribe_single_file, path, options): path for path in paths}
+            for future in as_completed(future_to_path):
+                completed += 1
+                path = future_to_path[future]
+                try:
+                    future.result()
+                    self.log(f"[{completed}/{total}] 完成: {path}")
+                except Exception as exc:
+                    failed += 1
+                    self.log(f"[{completed}/{total}] 转录失败: {exc}")
+                self.status_text.set(f"转录中 ({completed}/{total})...")
 
         if failed:
             self.status_text.set(f"完成（失败 {failed}/{total}）")
