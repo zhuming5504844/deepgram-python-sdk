@@ -1,9 +1,11 @@
 import json
 import os
 import threading
+import time
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import filedialog, messagebox, scrolledtext, ttk
+from urllib import error, parse, request
 
 from dotenv import load_dotenv
 
@@ -11,6 +13,27 @@ load_dotenv()
 
 from deepgram import DeepgramClient
 from deepgram.core import RequestOptions
+
+
+POLL_INTERVAL_SECONDS = 2
+POLL_TIMEOUT_SECONDS = 300
+SUPPORTED_AUDIO_EXTENSIONS = (
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".flac",
+    ".ogg",
+    ".aac",
+    ".mp4",
+    ".webm",
+    ".opus",
+    ".wma",
+    ".amr",
+    ".aiff",
+    ".aif",
+    ".caf",
+    ".m4b",
+)
 
 
 @dataclass
@@ -45,6 +68,7 @@ class DeepgramSubtitleGUI:
 
         self.audio_path = tk.StringVar()
         self.status_text = tk.StringVar(value="准备就绪")
+        self.audio_queue: list[str] = []
 
         self._build_ui()
         if self.dnd_available:
@@ -67,8 +91,19 @@ class DeepgramSubtitleGUI:
         self.file_entry = tk.Entry(file_row, textvariable=self.audio_path)
         self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        tk.Button(file_row, text="选择文件", command=self.select_file).pack(side=tk.LEFT, padx=6)
-        tk.Button(file_row, text="开始转录", command=self.start_transcription).pack(side=tk.LEFT)
+        queue_frame = tk.Frame(top_frame)
+        queue_frame.pack(fill=tk.BOTH, pady=(4, 0), expand=True)
+
+        self.queue_listbox = tk.Listbox(queue_frame, height=4)
+        self.queue_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        queue_buttons = tk.Frame(queue_frame)
+        queue_buttons.pack(side=tk.LEFT, padx=(6, 0), anchor="n")
+        tk.Button(queue_buttons, text="添加文件", command=self.select_files).pack(fill=tk.X, pady=(0, 4))
+        tk.Button(queue_buttons, text="移除选中", command=self.remove_selected_files).pack(fill=tk.X, pady=4)
+        tk.Button(queue_buttons, text="清空队列", command=self.clear_queue).pack(fill=tk.X, pady=(4, 0))
+
+        self.queue_listbox.bind("<<ListboxSelect>>", self._on_queue_selection)
 
         options_frame = tk.LabelFrame(self.root, text="转录参数 (全参数)")
         options_frame.pack(fill=tk.BOTH, padx=12, pady=8, expand=True)
@@ -166,6 +201,10 @@ class DeepgramSubtitleGUI:
 
         options_frame.columnconfigure(1, weight=1)
 
+        actions_frame = tk.Frame(self.root)
+        actions_frame.pack(fill=tk.X, padx=12, pady=(0, 4))
+        tk.Button(actions_frame, text="开始转录", command=self.start_transcription).pack(anchor="w")
+
         output_frame = tk.LabelFrame(self.root, text="日志")
         output_frame.pack(fill=tk.BOTH, padx=12, pady=8, expand=True)
 
@@ -215,21 +254,65 @@ class DeepgramSubtitleGUI:
         self.file_entry.drop_target_register(DND_FILES)
         self.file_entry.dnd_bind("<<Drop>>", self.handle_drop)
 
-    def select_file(self) -> None:
+    def select_files(self) -> None:
         filetypes = (
-            ("Audio", "*.wav *.mp3 *.m4a *.flac *.ogg *.aac *.mp4"),
+            ("Audio", " ".join(f"*{ext}" for ext in SUPPORTED_AUDIO_EXTENSIONS)),
             ("All files", "*.*"),
         )
-        filename = filedialog.askopenfilename(title="选择音频文件", filetypes=filetypes)
-        if filename:
-            self.audio_path.set(filename)
-            self.log(f"已选择文件: {filename}")
+        filenames = filedialog.askopenfilenames(title="选择音频文件", filetypes=filetypes)
+        self._add_files_to_queue(list(filenames))
+
+    def remove_selected_files(self) -> None:
+        selected_indices = list(self.queue_listbox.curselection())
+        if not selected_indices:
+            return
+        for index in reversed(selected_indices):
+            del self.audio_queue[index]
+        self._refresh_queue()
+
+    def clear_queue(self) -> None:
+        self.audio_queue.clear()
+        self._refresh_queue()
+
+    def _add_files_to_queue(self, files: list[str]) -> None:
+        added_count = 0
+        for filename in files:
+            normalized = filename.strip().strip("{}")
+            if not normalized:
+                continue
+            ext = os.path.splitext(normalized)[1].lower()
+            if ext not in SUPPORTED_AUDIO_EXTENSIONS:
+                self.log(f"跳过不支持格式: {normalized}")
+                continue
+            if normalized not in self.audio_queue:
+                self.audio_queue.append(normalized)
+                added_count += 1
+        if added_count:
+            self.log(f"已添加 {added_count} 个文件到队列")
+        self._refresh_queue()
+
+    def _refresh_queue(self) -> None:
+        self.queue_listbox.delete(0, tk.END)
+        for file_path in self.audio_queue:
+            self.queue_listbox.insert(tk.END, file_path)
+        if self.audio_queue:
+            self.audio_path.set(self.audio_queue[0])
+        else:
+            self.audio_path.set("")
+
+    def _on_queue_selection(self, event: tk.Event) -> None:
+        del event
+        selected_indices = self.queue_listbox.curselection()
+        if not selected_indices:
+            return
+        self.audio_path.set(self.audio_queue[selected_indices[0]])
 
     def handle_drop(self, event: tk.Event) -> None:
-        path = event.data.strip("{}")
-        if path:
-            self.audio_path.set(path)
-            self.log(f"已拖放文件: {path}")
+        data = event.data.strip()
+        if not data:
+            return
+        files = self.root.tk.splitlist(data)
+        self._add_files_to_queue(list(files))
 
     def paste_api_key(self) -> None:
         try:
@@ -324,12 +407,13 @@ class DeepgramSubtitleGUI:
             self._update_api_key_combo()
 
     def start_transcription(self) -> None:
-        path = self.audio_path.get().strip()
-        if not path:
+        if not self.audio_queue:
             messagebox.showwarning("提示", "请先选择或拖放音频文件。")
             return
-        if not os.path.exists(path):
-            messagebox.showerror("错误", f"文件不存在: {path}")
+
+        invalid_paths = [path for path in self.audio_queue if not os.path.exists(path)]
+        if invalid_paths:
+            messagebox.showerror("错误", f"文件不存在: {invalid_paths[0]}")
             return
 
         options = TranscriptionOptions(
@@ -360,12 +444,29 @@ class DeepgramSubtitleGUI:
         self._save_settings()
 
         threading.Thread(
-            target=self.transcribe_file,
-            args=(path, options),
+            target=self.transcribe_files,
+            args=(list(self.audio_queue), options),
             daemon=True,
         ).start()
 
-    def transcribe_file(self, path: str, options: TranscriptionOptions) -> None:
+    def transcribe_files(self, paths: list[str], options: TranscriptionOptions) -> None:
+        total = len(paths)
+        failed = 0
+        for index, path in enumerate(paths, start=1):
+            self.status_text.set(f"转录中 ({index}/{total})...")
+            self.log(f"[{index}/{total}] 开始处理: {path}")
+            try:
+                self._transcribe_single_file(path, options)
+            except Exception as exc:
+                failed += 1
+                self.log(f"[{index}/{total}] 转录失败: {exc}")
+
+        if failed:
+            self.status_text.set(f"完成（失败 {failed}/{total}）")
+        else:
+            self.status_text.set("完成")
+
+    def _transcribe_single_file(self, path: str, options: TranscriptionOptions) -> None:
         try:
             client = DeepgramClient(api_key=options.api_key or None)
             with open(path, "rb") as audio_file:
@@ -377,18 +478,54 @@ class DeepgramSubtitleGUI:
             response = client.listen.v1.media.transcribe_file(request=audio_data, **params)
             response_dict = self._response_to_dict(response)
             if response_dict.get("results") is None:
-                raise ValueError("转录返回结果为空，请确认请求未被异步接收或参数设置正确。")
+                response_dict = self._poll_transcription_result(response_dict, options.api_key)
             srt_text = self._build_srt(response_dict, options)
 
             output_path = os.path.splitext(path)[0] + ".srt"
             with open(output_path, "w", encoding="utf-8") as srt_file:
                 srt_file.write(srt_text)
 
-            self.status_text.set("完成")
             self.log(f"转录完成，已保存字幕: {output_path}")
         except Exception as exc:
-            self.status_text.set("转录失败")
-            self.log(f"转录失败: {exc}")
+            raise RuntimeError(f"{path}: {exc}") from exc
+
+    def _poll_transcription_result(self, response: dict, api_key: str) -> dict:
+        request_id = response.get("request_id") or response.get("metadata", {}).get("request_id")
+        if not request_id:
+            raise ValueError("转录返回结果为空，且未提供 request_id，无法继续轮询。")
+
+        headers = {
+            "Authorization": f"Token {api_key}" if api_key else "",
+            "Accept": "application/json",
+        }
+        headers = {k: v for k, v in headers.items() if v}
+        query = parse.urlencode({"extra": "true"})
+        endpoint = f"https://api.deepgram.com/v1/listen/{request_id}?{query}"
+        start_time = time.monotonic()
+
+        self.log(
+            f"未直接返回结果，进入异步结果轮询（间隔 {POLL_INTERVAL_SECONDS}s，超时 {POLL_TIMEOUT_SECONDS}s）..."
+        )
+
+        while True:
+            if time.monotonic() - start_time >= POLL_TIMEOUT_SECONDS:
+                raise TimeoutError(f"轮询超时（>{POLL_TIMEOUT_SECONDS}s），request_id={request_id}")
+
+            req = request.Request(endpoint, headers=headers, method="GET")
+            try:
+                with request.urlopen(req, timeout=max(10, POLL_INTERVAL_SECONDS + 2)) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            except error.HTTPError as exc:
+                if exc.code == 404:
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                    continue
+                raise RuntimeError(f"轮询请求失败: HTTP {exc.code}") from exc
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"轮询请求异常: {exc}") from exc
+
+            if payload.get("results"):
+                return payload
+            time.sleep(POLL_INTERVAL_SECONDS)
 
     def _build_params(self, options: TranscriptionOptions) -> dict:
         params = {
