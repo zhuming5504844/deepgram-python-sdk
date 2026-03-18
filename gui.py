@@ -508,6 +508,7 @@ class DeepgramSubtitleGUI(QMainWindow):
 
         content_splitter.setStretchFactor(0, 9)
         content_splitter.setStretchFactor(1, 11)
+        content_splitter.setSizes([900, 1100])
 
         queue_group = QGroupBox("音频队列")
         queue_layout = QVBoxLayout(queue_group)
