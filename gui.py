@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
 from urllib import error, parse, request
+from urllib.parse import unquote, urlparse
 
 from dotenv import load_dotenv
 from PySide6.QtCore import QMimeData, QObject, QSettings, Qt, QThread, Signal
@@ -658,15 +659,34 @@ class DeepgramSubtitleGUI(QMainWindow):
         self.audio_queue.clear()
         self._refresh_queue()
 
+    def _normalize_input_path(self, raw_path: str) -> str:
+        candidate = raw_path.strip().strip("{}").strip().strip("\"'")
+        if not candidate:
+            return ""
+
+        parsed = urlparse(candidate)
+        if parsed.scheme == "file":
+            candidate = unquote(parsed.path or "")
+            if parsed.netloc:
+                candidate = f"//{parsed.netloc}{candidate}"
+            if len(candidate) >= 3 and candidate[0] == "/" and candidate[2] == ":":
+                candidate = candidate[1:]
+
+        candidate = os.path.expanduser(os.path.expandvars(candidate))
+        return os.path.normpath(candidate)
+
     def _add_files_to_queue(self, files: list[str]) -> None:
         added_count = 0
         for filename in files:
-            normalized = os.path.abspath(filename.strip().strip("{}").strip())
+            normalized = self._normalize_input_path(filename)
             if not normalized:
                 continue
             ext = os.path.splitext(normalized)[1].lower()
             if ext not in SUPPORTED_AUDIO_EXTENSIONS:
                 self.log(f"跳过不支持格式: {normalized}")
+                continue
+            if not os.path.exists(normalized):
+                self.log(f"跳过不存在的文件: {normalized}")
                 continue
             if normalized not in self.audio_queue:
                 self.audio_queue.append(normalized)
