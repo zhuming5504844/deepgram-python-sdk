@@ -7,11 +7,12 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from enum import Enum
 from urllib import error, parse, request
 
 from dotenv import load_dotenv
 from PySide6.QtCore import QMimeData, QObject, QSettings, Qt, QThread, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QProgressBar,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -80,6 +82,13 @@ LANGUAGE_OPTIONS = {
 }
 
 
+class FileStatus(str, Enum):
+    PENDING = "待处理"
+    RUNNING = "转录中"
+    SUCCESS = "已完成"
+    FAILED = "失败"
+
+
 @dataclass
 class TranscriptionOptions:
     api_key: str
@@ -101,6 +110,7 @@ class TranscriptionOptions:
     word_segmentation: bool
     timeout_seconds: int
     max_retries: int
+    output_directory: str
 
 
 class DropListWidget(QListWidget):
@@ -151,9 +161,9 @@ class DropListWidget(QListWidget):
 class TranscriptionWorker(QObject):
     log_message = Signal(str)
     progress_message = Signal(str)
+    progress_updated = Signal(int, int)
     finished = Signal(int, int)
-    file_completed = Signal(str)
-    file_failed = Signal(str, str)
+    file_status_changed = Signal(str, str, str)
 
     def __init__(self, paths: list[str], options: TranscriptionOptions) -> None:
         super().__init__()
@@ -176,17 +186,19 @@ class TranscriptionWorker(QObject):
                 path = future_to_path[future]
                 try:
                     future.result()
-                    self.file_completed.emit(path)
+                    self.file_status_changed.emit(path, FileStatus.SUCCESS.value, "")
                     self.log_message.emit(f"[{completed}/{total}] 完成: {path}")
                 except Exception as exc:  # noqa: BLE001 - surfaced to UI log
                     failed += 1
-                    self.file_failed.emit(path, str(exc))
+                    self.file_status_changed.emit(path, FileStatus.FAILED.value, str(exc))
                     self.log_message.emit(f"[{completed}/{total}] 转录失败: {exc}")
+                self.progress_updated.emit(completed, total)
                 self.progress_message.emit(f"转录中 ({completed}/{total})...")
 
         self.finished.emit(total, failed)
 
     def _transcribe_single_file(self, path: str, options: TranscriptionOptions) -> None:
+        self.file_status_changed.emit(path, FileStatus.RUNNING.value, "")
         try:
             client = DeepgramClient(api_key=options.api_key or None)
             with open(path, "rb") as audio_file:
@@ -201,7 +213,10 @@ class TranscriptionWorker(QObject):
                 response_dict = self._poll_transcription_result(response_dict, options.api_key)
             srt_text = self._build_srt(response_dict, options)
 
-            output_path = os.path.splitext(path)[0] + ".srt"
+            output_name = os.path.splitext(os.path.basename(path))[0] + ".srt"
+            output_dir = options.output_directory or os.path.dirname(path)
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, output_name)
             with open(output_path, "w", encoding="utf-8") as srt_file:
                 srt_file.write(srt_text)
 
@@ -508,8 +523,16 @@ class DeepgramSubtitleGUI(QMainWindow):
         actions_group = QGroupBox("执行")
         actions_layout = QVBoxLayout(actions_group)
         self.start_button = QPushButton("开始转录")
+        self.retry_failed_button = QPushButton("重试失败任务")
+        self.retry_failed_button.setEnabled(False)
         self.start_button.setMinimumHeight(46)
         actions_layout.addWidget(self.start_button)
+        actions_layout.addWidget(self.retry_failed_button)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%")
+        actions_layout.addWidget(self.progress_bar)
         left_column.addWidget(actions_group)
 
         log_group = QGroupBox("日志")
@@ -554,6 +577,14 @@ class DeepgramSubtitleGUI(QMainWindow):
         self.max_pause_edit = QLineEdit("1.0")
         self.timeout_edit = QLineEdit("300")
         self.retry_edit = QLineEdit("2")
+        output_dir_row = QHBoxLayout()
+        self.output_dir_edit = QLineEdit()
+        self.output_dir_button = QPushButton("选择目录")
+        output_dir_row.addWidget(self.output_dir_edit, 1)
+        output_dir_row.addWidget(self.output_dir_button)
+        output_dir_widget = QWidget()
+        output_dir_widget.setLayout(output_dir_row)
+        form_layout.addRow("输出目录", output_dir_widget)
         form_layout.addRow("每段最大字符数", self.max_chars_edit)
         form_layout.addRow("每段最长期限(秒)", self.max_duration_edit)
         form_layout.addRow("每段最大停顿(秒)", self.max_pause_edit)
@@ -594,6 +625,8 @@ class DeepgramSubtitleGUI(QMainWindow):
         self.remove_files_button.clicked.connect(self.remove_selected_files)
         self.clear_files_button.clicked.connect(self.clear_queue)
         self.start_button.clicked.connect(self.start_transcription)
+        self.retry_failed_button.clicked.connect(self.retry_failed_tasks)
+        self.output_dir_button.clicked.connect(self.select_output_directory)
         self.paste_api_button.clicked.connect(self.paste_api_key)
         self.import_api_button.clicked.connect(self.import_api_key)
         self.clear_api_button.clicked.connect(self.clear_api_key)
@@ -645,7 +678,10 @@ class DeepgramSubtitleGUI(QMainWindow):
     def _refresh_queue(self) -> None:
         self.queue_list.clear()
         for file_path in self.audio_queue:
-            QListWidgetItem(file_path, self.queue_list)
+            item = QListWidgetItem(self._format_queue_item_text(file_path, FileStatus.PENDING.value), self.queue_list)
+            item.setData(Qt.UserRole, file_path)
+            item.setData(Qt.UserRole + 1, FileStatus.PENDING.value)
+            self._set_item_color(item, FileStatus.PENDING.value)
         self._update_queue_placeholder()
 
     def _update_queue_placeholder(self) -> None:
@@ -659,6 +695,73 @@ class DeepgramSubtitleGUI(QMainWindow):
     def _on_queue_selection(self) -> None:
         if not self.queue_list.selectedItems():
             return
+
+    def select_output_directory(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "选择输出目录", self.output_dir_edit.text().strip() or os.getcwd())
+        if directory:
+            self.output_dir_edit.setText(directory)
+
+    def _format_queue_item_text(self, file_path: str, status: str, detail: str = "") -> str:
+        base = f"[{status}] {file_path}"
+        if detail:
+            return f"{base}\n    {detail}"
+        return base
+
+    def _find_queue_item(self, file_path: str) -> QListWidgetItem | None:
+        for index in range(self.queue_list.count()):
+            item = self.queue_list.item(index)
+            if item.data(Qt.UserRole) == file_path:
+                return item
+        return None
+
+    def _set_item_color(self, item: QListWidgetItem, status: str) -> None:
+        colors = {
+            FileStatus.PENDING.value: "#94A3B8",
+            FileStatus.RUNNING.value: "#60A5FA",
+            FileStatus.SUCCESS.value: "#34D399",
+            FileStatus.FAILED.value: "#F87171",
+        }
+        item.setForeground(QColor(colors.get(status, "#E6EAF2")))
+
+    def _initialize_file_statuses(self, paths: list[str]) -> None:
+        for path in paths:
+            self._update_file_status(path, FileStatus.PENDING.value, "")
+
+    def _update_file_status(self, file_path: str, status: str, detail: str = "") -> None:
+        item = self._find_queue_item(file_path)
+        if item is None:
+            return
+        item.setText(self._format_queue_item_text(file_path, status, detail))
+        item.setData(Qt.UserRole + 1, status)
+        item.setData(Qt.UserRole + 2, detail)
+        self._set_item_color(item, status)
+
+    def _reset_progress(self, total: int) -> None:
+        self.progress_bar.setMaximum(max(1, total))
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat(f"0/{total}" if total else "0/0")
+
+    def _update_progress(self, completed: int, total: int) -> None:
+        self.progress_bar.setMaximum(max(1, total))
+        self.progress_bar.setValue(completed)
+        self.progress_bar.setFormat(f"{completed}/{total}")
+
+    def _failed_paths(self) -> list[str]:
+        failed = []
+        for index in range(self.queue_list.count()):
+            item = self.queue_list.item(index)
+            if item.data(Qt.UserRole + 1) == FileStatus.FAILED.value:
+                failed.append(item.data(Qt.UserRole))
+        return failed
+
+    def retry_failed_tasks(self) -> None:
+        failed_paths = self._failed_paths()
+        if not failed_paths:
+            QMessageBox.information(self, "提示", "当前没有失败任务可重试。")
+            return
+        self.audio_queue = failed_paths
+        self._refresh_queue()
+        self.start_transcription()
 
     def paste_api_key(self) -> None:
         clipboard = QApplication.clipboard()
@@ -763,6 +866,10 @@ class DeepgramSubtitleGUI(QMainWindow):
         return LANGUAGE_OPTIONS.get(value, value)
 
     def _collect_options(self) -> TranscriptionOptions:
+        output_directory = self.output_dir_edit.text().strip()
+        if output_directory:
+            output_directory = os.path.abspath(output_directory)
+
         return TranscriptionOptions(
             api_key=self.api_key_combo.currentText().strip(),
             model=self.model_edit.text().strip(),
@@ -783,6 +890,7 @@ class DeepgramSubtitleGUI(QMainWindow):
             word_segmentation=self.checkboxes["word_segmentation"].isChecked(),
             timeout_seconds=int(self.timeout_edit.text().strip() or "300"),
             max_retries=int(self.retry_edit.text().strip() or "2"),
+            output_directory=output_directory,
         )
 
     def start_transcription(self) -> None:
@@ -805,6 +913,8 @@ class DeepgramSubtitleGUI(QMainWindow):
             return
 
         self._save_settings()
+        self._reset_progress(len(self.audio_queue))
+        self._initialize_file_statuses(self.audio_queue)
         self.statusBar().showMessage("转录中，请稍候...")
         self.log("开始转录，请等待...")
         self._set_running_state(True)
@@ -815,6 +925,8 @@ class DeepgramSubtitleGUI(QMainWindow):
         self.worker_thread.started.connect(self.worker.run)
         self.worker.log_message.connect(self.log)
         self.worker.progress_message.connect(self.statusBar().showMessage)
+        self.worker.progress_updated.connect(self._update_progress)
+        self.worker.file_status_changed.connect(self._update_file_status)
         self.worker.finished.connect(self._on_transcription_finished)
         self.worker.finished.connect(self.worker_thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
@@ -832,10 +944,13 @@ class DeepgramSubtitleGUI(QMainWindow):
             self.import_api_button,
             self.clear_api_button,
             self.remove_api_button,
+            self.output_dir_button,
         ]:
             widget.setDisabled(running)
+        self.retry_failed_button.setDisabled(running or not self._failed_paths())
 
     def _on_transcription_finished(self, total: int, failed: int) -> None:
+        self.retry_failed_button.setEnabled(bool(self._failed_paths()))
         if failed:
             self.statusBar().showMessage(f"完成（失败 {failed}/{total}）")
             self.log(f"全部任务结束：总计 {total} 个，失败 {failed} 个。")
@@ -879,6 +994,7 @@ class DeepgramSubtitleGUI(QMainWindow):
         self.max_pause_edit.setText(str(self.settings.value("max_pause", self.max_pause_edit.text(), str)))
         self.timeout_edit.setText(str(self.settings.value("timeout_seconds", self.timeout_edit.text(), str)))
         self.retry_edit.setText(str(self.settings.value("max_retries", self.retry_edit.text(), str)))
+        self.output_dir_edit.setText(str(self.settings.value("output_directory", "", str)))
 
     def _save_settings(self) -> None:
         self._remember_current_api_key()
@@ -893,6 +1009,7 @@ class DeepgramSubtitleGUI(QMainWindow):
         self.settings.setValue("max_pause", self.max_pause_edit.text().strip())
         self.settings.setValue("timeout_seconds", self.timeout_edit.text().strip())
         self.settings.setValue("max_retries", self.retry_edit.text().strip())
+        self.settings.setValue("output_directory", self.output_dir_edit.text().strip())
         self.settings.sync()
 
     def log(self, message: str) -> None:
