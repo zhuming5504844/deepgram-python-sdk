@@ -2,6 +2,7 @@
 .ruff_cache/
 __pycache__/
 dist/
+build/
 poetry.toml
 .env
 .pytest_cache/
@@ -17,3 +18,4 @@ venv/
 Pipfile
 Pipfile.lock
 deepgram_sdk.egg-info/
+
