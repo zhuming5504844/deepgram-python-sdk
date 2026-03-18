@@ -506,8 +506,6 @@ class DeepgramSubtitleGUI(QMainWindow):
         right_column.setSpacing(12)
         self.content_splitter.addWidget(right_panel)
 
-        self.content_splitter.setStretchFactor(0, 11)
-        self.content_splitter.setStretchFactor(1, 9)
         QTimer.singleShot(0, self._apply_default_splitter_ratio)
 
         queue_group = QGroupBox("音频队列")
@@ -656,8 +654,21 @@ class DeepgramSubtitleGUI(QMainWindow):
         total_width = self.content_splitter.size().width()
         if total_width <= 0:
             total_width = max(1, self.width() - 32)
-        left_width = int(total_width * 11 / 20)
+
+        left_widget = self.content_splitter.widget(0)
+        right_widget = self.content_splitter.widget(1)
+        left_hint = max(1, left_widget.sizeHint().width() if left_widget is not None else 1)
+        right_hint = max(1, right_widget.sizeHint().width() if right_widget is not None else 1)
+
+        hint_total = left_hint + right_hint
+        left_ratio = left_hint / hint_total
+        left_ratio = min(0.65, max(0.35, left_ratio))
+
+        left_width = int(total_width * left_ratio)
         right_width = max(1, total_width - left_width)
+
+        self.content_splitter.setStretchFactor(0, left_hint)
+        self.content_splitter.setStretchFactor(1, right_hint)
         self.content_splitter.setSizes([left_width, right_width])
 
     def select_files(self) -> None:
