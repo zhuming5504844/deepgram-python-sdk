@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QProgressBar,
+    QSplitter,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -489,17 +490,24 @@ class DeepgramSubtitleGUI(QMainWindow):
         header_layout.addWidget(subtitle)
         main_layout.addWidget(header)
 
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(12)
-        main_layout.addLayout(content_layout, 1)
+        content_splitter = QSplitter(Qt.Horizontal)
+        content_splitter.setChildrenCollapsible(False)
+        main_layout.addWidget(content_splitter, 1)
 
-        left_column = QVBoxLayout()
+        left_panel = QWidget()
+        left_column = QVBoxLayout(left_panel)
+        left_column.setContentsMargins(0, 0, 0, 0)
         left_column.setSpacing(12)
-        content_layout.addLayout(left_column, 4)
+        content_splitter.addWidget(left_panel)
 
-        right_column = QVBoxLayout()
+        right_panel = QWidget()
+        right_column = QVBoxLayout(right_panel)
+        right_column.setContentsMargins(0, 0, 0, 0)
         right_column.setSpacing(12)
-        content_layout.addLayout(right_column, 5)
+        content_splitter.addWidget(right_panel)
+
+        content_splitter.setStretchFactor(0, 9)
+        content_splitter.setStretchFactor(1, 11)
 
         queue_group = QGroupBox("音频队列")
         queue_layout = QVBoxLayout(queue_group)
