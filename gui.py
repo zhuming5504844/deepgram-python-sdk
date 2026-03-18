@@ -919,21 +919,37 @@ class DeepgramSubtitleGUI(QMainWindow):
         event.accept()
 
 
+def _apply_theme(app: QApplication) -> None:
+    custom_qss = """
+        QLabel#titleLabel { font-size: 28px; font-weight: 700; }
+        QGroupBox { font-weight: 600; }
+        QPushButton { padding: 8px 14px; }
+        QPlainTextEdit, QListWidget, QLineEdit, QComboBox { border-radius: 8px; }
+        QFrame { border-radius: 16px; background: palette(base); }
+    """
+
+    if qdarktheme is None:
+        app.setStyle("Fusion")
+        app.setStyleSheet(custom_qss)
+        return
+
+    if hasattr(qdarktheme, "setup_theme"):
+        qdarktheme.setup_theme("auto", additional_qss=custom_qss)
+        return
+
+    if hasattr(qdarktheme, "load_stylesheet"):
+        app.setStyleSheet(qdarktheme.load_stylesheet() + "\n" + custom_qss)
+        return
+
+    app.setStyle("Fusion")
+    app.setStyleSheet(custom_qss)
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Deepgram Subtitle GUI")
     app.setOrganizationName("deepgram-python-sdk")
-
-    if qdarktheme is not None:
-        qdarktheme.setup_theme("auto", additional_qss="""
-            QLabel#titleLabel { font-size: 28px; font-weight: 700; }
-            QGroupBox { font-weight: 600; }
-            QPushButton { padding: 8px 14px; }
-            QPlainTextEdit, QListWidget, QLineEdit, QComboBox { border-radius: 8px; }
-            QFrame { border-radius: 16px; background: palette(base); }
-        """)
-    else:
-        app.setStyle("Fusion")
+    _apply_theme(app)
 
     window = DeepgramSubtitleGUI()
     window.show()
