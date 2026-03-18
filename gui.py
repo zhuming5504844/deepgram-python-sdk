@@ -461,11 +461,13 @@ class DeepgramSubtitleGUI(QMainWindow):
         main_layout.setSpacing(12)
 
         header = QFrame()
+        header.setObjectName("heroCard")
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(18, 18, 18, 18)
         title = QLabel("Deepgram 字幕转录")
         title.setObjectName("titleLabel")
         subtitle = QLabel("PySide6 + qdarktheme 界面，支持拖拽上传、批量转写、轮询与 SRT 导出。")
+        subtitle.setObjectName("subtitleLabel")
         subtitle.setWordWrap(True)
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
@@ -485,9 +487,6 @@ class DeepgramSubtitleGUI(QMainWindow):
 
         queue_group = QGroupBox("音频队列")
         queue_layout = QVBoxLayout(queue_group)
-        queue_hint = QLabel("可直接把音频文件拖到下方列表，使用 Qt 原生拖放，不再依赖 tkinterdnd2。")
-        queue_hint.setWordWrap(True)
-        queue_layout.addWidget(queue_hint)
 
         self.queue_list = DropListWidget()
         self.queue_list.setMinimumHeight(220)
@@ -508,11 +507,8 @@ class DeepgramSubtitleGUI(QMainWindow):
 
         actions_group = QGroupBox("执行")
         actions_layout = QVBoxLayout(actions_group)
-        self.current_file_label = QLabel("当前文件：未选择")
-        self.current_file_label.setWordWrap(True)
         self.start_button = QPushButton("开始转录")
         self.start_button.setMinimumHeight(46)
-        actions_layout.addWidget(self.current_file_label)
         actions_layout.addWidget(self.start_button)
         left_column.addWidget(actions_group)
 
@@ -651,10 +647,6 @@ class DeepgramSubtitleGUI(QMainWindow):
         for file_path in self.audio_queue:
             QListWidgetItem(file_path, self.queue_list)
         self._update_queue_placeholder()
-        if self.audio_queue:
-            self.current_file_label.setText(f"当前文件：{self.audio_queue[0]}")
-        else:
-            self.current_file_label.setText("当前文件：未选择")
 
     def _update_queue_placeholder(self) -> None:
         if not self.audio_queue:
@@ -665,10 +657,8 @@ class DeepgramSubtitleGUI(QMainWindow):
             self.queue_list.setToolTip("")
 
     def _on_queue_selection(self) -> None:
-        selected_items = self.queue_list.selectedItems()
-        if not selected_items:
+        if not self.queue_list.selectedItems():
             return
-        self.current_file_label.setText(f"当前文件：{selected_items[0].text()}")
 
     def paste_api_key(self) -> None:
         clipboard = QApplication.clipboard()
@@ -921,11 +911,54 @@ class DeepgramSubtitleGUI(QMainWindow):
 
 def _apply_theme(app: QApplication) -> None:
     custom_qss = """
-        QLabel#titleLabel { font-size: 28px; font-weight: 700; }
-        QGroupBox { font-weight: 600; }
-        QPushButton { padding: 8px 14px; }
-        QPlainTextEdit, QListWidget, QLineEdit, QComboBox { border-radius: 8px; }
-        QFrame { border-radius: 16px; background: palette(base); }
+        QWidget { color: #E6EAF2; }
+        QLabel { color: #E6EAF2; background: transparent; }
+        QLabel#titleLabel { font-size: 28px; font-weight: 700; color: #F8FAFC; }
+        QLabel#subtitleLabel { color: #CBD5E1; font-size: 13px; }
+        QGroupBox {
+            font-weight: 600;
+            border: 1px solid #3F4654;
+            border-radius: 10px;
+            margin-top: 12px;
+            padding-top: 14px;
+            background: #22252D;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 12px;
+            padding: 0 6px;
+            color: #F8FAFC;
+        }
+        QPushButton {
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1px solid #4B5563;
+            background: #2D3748;
+            color: #F8FAFC;
+        }
+        QPushButton:hover { background: #3B475A; }
+        QPlainTextEdit, QListWidget, QLineEdit, QComboBox {
+            border-radius: 8px;
+            border: 1px solid #4B5563;
+            background: #151821;
+            color: #F8FAFC;
+            selection-background-color: #2563EB;
+            selection-color: #F8FAFC;
+            padding: 6px;
+        }
+        QComboBox QAbstractItemView {
+            background: #151821;
+            color: #F8FAFC;
+            border: 1px solid #4B5563;
+            selection-background-color: #2563EB;
+        }
+        QPlainTextEdit[readOnly="true"], QListWidget { background: #11141B; }
+        QFrame#heroCard {
+            border-radius: 16px;
+            border: 1px solid #3F4654;
+            background: #2A2F3A;
+        }
+        QStatusBar { color: #E6EAF2; }
     """
 
     if qdarktheme is None:
