@@ -1,22 +1,49 @@
 import inspect
 import json
 import os
+import shlex
 import socket
-import threading
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import tkinter as tk
 from dataclasses import dataclass
-from tkinter import filedialog, messagebox, scrolledtext, ttk
 from urllib import error, parse, request
 
 from dotenv import load_dotenv
+from PySide6.QtCore import QMimeData, QObject, QSettings, Qt, QThread, Signal
+from PySide6.QtGui import QAction, QCloseEvent, QDragEnterEvent, QDropEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QPlainTextEdit,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
+    QLineEdit,
+)
 
 load_dotenv()
 
+try:
+    import qdarktheme
+except ImportError:  # optional dependency at runtime for graceful fallback
+    qdarktheme = None
+
 from deepgram import DeepgramClient
 from deepgram.core import RequestOptions
-
 
 POLL_INTERVAL_SECONDS = 2
 POLL_TIMEOUT_SECONDS = 300
@@ -38,6 +65,19 @@ SUPPORTED_AUDIO_EXTENSIONS = (
     ".caf",
     ".m4b",
 )
+LANGUAGE_OPTIONS = {
+    "自动(检测)": "",
+    "多语言(multi)": "multi",
+    "英语(en)": "en",
+    "日语(ja)": "ja",
+    "中文(zh)": "zh",
+    "韩语(ko)": "ko",
+    "法语(fr)": "fr",
+    "德语(de)": "de",
+    "西班牙语(es)": "es",
+    "葡萄牙语(pt)": "pt",
+    "意大利语(it)": "it",
+}
 
 
 @dataclass
@@ -63,422 +103,88 @@ class TranscriptionOptions:
     max_retries: int
 
 
-class DeepgramSubtitleGUI:
-    def __init__(self, root: tk.Tk, dnd_available: bool = False) -> None:
-        self.root = root
-        self.dnd_available = dnd_available
-        self.root.title("Deepgram 字幕转录 (拖放音频)")
-        self.root.geometry("900x780")
+class DropListWidget(QListWidget):
+    files_dropped = Signal(list)
 
-        self.audio_path = tk.StringVar()
-        self.status_text = tk.StringVar(value="准备就绪")
-        self.audio_queue: list[str] = []
+    def __init__(self) -> None:
+        super().__init__()
+        self.setAcceptDrops(True)
+        self.setSelectionMode(QListWidget.ExtendedSelection)
+        self.setAlternatingRowColors(True)
 
-        self._build_ui()
-        if self.dnd_available:
-            self._setup_drag_and_drop()
-        else:
-            self.log("拖放功能需要 tkinterdnd2 (可选依赖)，当前将使用选择文件按钮。")
-
-        self._load_settings()
-        self._ensure_settings_file()
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-    def _build_ui(self) -> None:
-        top_frame = tk.Frame(self.root)
-        top_frame.pack(fill=tk.X, padx=12, pady=8)
-
-        tk.Label(top_frame, text="音频文件").pack(anchor="w")
-
-        queue_frame = tk.Frame(top_frame)
-        queue_frame.pack(fill=tk.BOTH, pady=(4, 0), expand=True)
-
-        self.queue_listbox = tk.Listbox(queue_frame, height=4)
-        self.queue_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        queue_buttons = tk.Frame(queue_frame)
-        queue_buttons.pack(side=tk.LEFT, padx=(6, 0), anchor="n")
-        tk.Button(queue_buttons, text="添加文件", command=self.select_files).pack(fill=tk.X, pady=(0, 4))
-        tk.Button(queue_buttons, text="移除选中", command=self.remove_selected_files).pack(fill=tk.X, pady=4)
-        tk.Button(queue_buttons, text="清空队列", command=self.clear_queue).pack(fill=tk.X, pady=(4, 0))
-
-        self.queue_listbox.bind("<<ListboxSelect>>", self._on_queue_selection)
-
-        options_frame = tk.LabelFrame(self.root, text="转录参数 (全参数)")
-        options_frame.pack(fill=tk.BOTH, padx=12, pady=8, expand=True)
-
-        self.api_key_var = tk.StringVar(value="")
-        self.model_var = tk.StringVar(value="nova-3")
-        self.language_var = tk.StringVar(value="自动(检测)")
-        self.detect_language_var = tk.BooleanVar(value=False)
-        self.word_timestamps_var = tk.BooleanVar(value=True)
-        self.punctuate_var = tk.BooleanVar(value=True)
-        self.smart_format_var = tk.BooleanVar(value=True)
-        self.utterances_var = tk.BooleanVar(value=True)
-        self.diarize_var = tk.BooleanVar(value=False)
-        self.numerals_var = tk.BooleanVar(value=True)
-        self.filler_words_var = tk.BooleanVar(value=False)
-        self.profanity_filter_var = tk.BooleanVar(value=False)
-        self.paragraphs_var = tk.BooleanVar(value=False)
-        self.max_chars_var = tk.IntVar(value=16)
-        self.max_duration_var = tk.DoubleVar(value=6.0)
-        self.max_pause_var = tk.DoubleVar(value=1.0)
-        self.word_segmentation_var = tk.BooleanVar(value=True)
-        self.timeout_seconds_var = tk.IntVar(value=300)
-        self.max_retries_var = tk.IntVar(value=2)
-        self.api_key_history: list[str] = []
-
-        row = 0
-        row = self._add_api_key_row(options_frame, row)
-        row = self._add_labeled_entry(options_frame, row, "模型(model)", self.model_var)
-        row = self._add_language_dropdown(options_frame, row)
-
-        checkbox_frame = tk.Frame(options_frame)
-        checkbox_frame.grid(row=row, column=0, columnspan=2, sticky="w", pady=6)
-        row += 1
-
-        checkboxes = [
-            ("自动识别语言", self.detect_language_var),
-            ("字词级时间戳", self.word_timestamps_var),
-            ("标点", self.punctuate_var),
-            ("智能格式化", self.smart_format_var),
-            ("按话语分段(utterances)", self.utterances_var),
-            ("说话人区分", self.diarize_var),
-            ("数字转写", self.numerals_var),
-            ("填充词(filler)", self.filler_words_var),
-            ("敏感词过滤", self.profanity_filter_var),
-            ("段落(paragraphs)", self.paragraphs_var),
-        ]
-        for index, (label, variable) in enumerate(checkboxes):
-            tk.Checkbutton(checkbox_frame, text=label, variable=variable).grid(
-                row=index // 5,
-                column=index % 5,
-                sticky="w",
-                padx=(0, 12),
-                pady=2,
-            )
-
-        tk.Label(options_frame, text="每段最大字符数").grid(
-            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
-        )
-        max_chars_entry = tk.Entry(options_frame, textvariable=self.max_chars_var)
-        max_chars_entry.grid(row=row, column=1, sticky="ew", padx=4)
-        row += 1
-
-        tk.Label(options_frame, text="每段最长期限(秒)").grid(
-            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
-        )
-        max_duration_entry = tk.Entry(options_frame, textvariable=self.max_duration_var)
-        max_duration_entry.grid(row=row, column=1, sticky="ew", padx=4)
-        row += 1
-
-        tk.Label(options_frame, text="每段最大停顿(秒)").grid(
-            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
-        )
-        max_pause_entry = tk.Entry(options_frame, textvariable=self.max_pause_var)
-        max_pause_entry.grid(row=row, column=1, sticky="ew", padx=4)
-        row += 1
-
-        tk.Checkbutton(options_frame, text="启用字词级自动分段", variable=self.word_segmentation_var).grid(
-            row=row, column=0, columnspan=2, sticky="w", padx=4, pady=(6, 2)
-        )
-        row += 1
-
-        tk.Label(options_frame, text="请求超时(秒)").grid(
-            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
-        )
-        timeout_entry = tk.Entry(options_frame, textvariable=self.timeout_seconds_var)
-        timeout_entry.grid(row=row, column=1, sticky="ew", padx=4)
-        row += 1
-
-        tk.Label(options_frame, text="重试次数").grid(
-            row=row, column=0, sticky="w", padx=4, pady=(6, 2)
-        )
-        retries_entry = tk.Entry(options_frame, textvariable=self.max_retries_var)
-        retries_entry.grid(row=row, column=1, sticky="ew", padx=4)
-        row += 1
-
-        options_frame.columnconfigure(1, weight=1)
-
-        actions_frame = tk.Frame(self.root)
-        actions_frame.pack(fill=tk.X, padx=12, pady=(0, 4))
-        tk.Button(
-            actions_frame,
-            text="开始转录",
-            command=self.start_transcription,
-            width=14,
-            height=2,
-            font=("微软雅黑", 11, "bold"),
-        ).pack(anchor="w", pady=(4, 6))
-
-        output_frame = tk.LabelFrame(self.root, text="日志")
-        output_frame.pack(fill=tk.BOTH, padx=12, pady=8, expand=True)
-
-        self.log_output = scrolledtext.ScrolledText(output_frame, height=16)
-        self.log_output.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-
-        status_bar = tk.Label(self.root, textvariable=self.status_text, anchor="w")
-        status_bar.pack(fill=tk.X, padx=12, pady=(0, 8))
-
-    def _add_labeled_entry(self, parent: tk.Widget, row: int, label: str, variable: tk.StringVar) -> int:
-        tk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
-        entry = tk.Entry(parent, textvariable=variable)
-        entry.grid(row=row, column=1, sticky="ew", padx=4, pady=2)
-        return row + 1
-
-    def _add_api_key_row(self, parent: tk.Widget, row: int) -> int:
-        tk.Label(parent, text="API Key").grid(row=row, column=0, sticky="w", padx=4, pady=2)
-        api_frame = tk.Frame(parent)
-        api_frame.grid(row=row, column=1, sticky="ew", padx=4, pady=2)
-        api_frame.columnconfigure(0, weight=1)
-
-        self.api_key_combo = ttk.Combobox(
-            api_frame,
-            textvariable=self.api_key_var,
-            values=self.api_key_history,
-        )
-        self.api_key_combo.grid(row=0, column=0, sticky="ew")
-        self.api_key_combo.bind("<<ComboboxSelected>>", self._on_api_key_selected)
-        tk.Button(api_frame, text="粘贴", command=self.paste_api_key).grid(row=0, column=1, padx=4)
-        tk.Button(api_frame, text="导入", command=self.import_api_key).grid(row=0, column=2, padx=4)
-        tk.Button(api_frame, text="清空", command=self.clear_api_key).grid(row=0, column=3, padx=4)
-        tk.Button(api_frame, text="删除当前", command=self.remove_selected_api_key).grid(row=0, column=4, padx=4)
-        return row + 1
-
-    def _add_language_dropdown(self, parent: tk.Widget, row: int) -> int:
-        tk.Label(parent, text="语言(language)").grid(row=row, column=0, sticky="w", padx=4, pady=2)
-        language_values = list(self._language_options().keys())
-        combo = ttk.Combobox(parent, textvariable=self.language_var, values=language_values)
-        combo.grid(row=row, column=1, sticky="ew", padx=4, pady=2)
-        combo.set(self.language_var.get() or language_values[0])
-        return row + 1
-
-
-    def _setup_drag_and_drop(self) -> None:
-        from tkinterdnd2 import DND_FILES
-
-        self.queue_listbox.drop_target_register(DND_FILES)
-        self.queue_listbox.dnd_bind("<<Drop>>", self.handle_drop)
-
-    def select_files(self) -> None:
-        filetypes = (
-            ("Audio", " ".join(f"*{ext}" for ext in SUPPORTED_AUDIO_EXTENSIONS)),
-            ("All files", "*.*"),
-        )
-        filenames = filedialog.askopenfilenames(title="选择音频文件", filetypes=filetypes)
-        self._add_files_to_queue(list(filenames))
-
-    def remove_selected_files(self) -> None:
-        selected_indices = list(self.queue_listbox.curselection())
-        if not selected_indices:
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
             return
-        for index in reversed(selected_indices):
-            del self.audio_queue[index]
-        self._refresh_queue()
+        super().dragEnterEvent(event)
 
-    def clear_queue(self) -> None:
-        self.audio_queue.clear()
-        self._refresh_queue()
-
-    def _add_files_to_queue(self, files: list[str]) -> None:
-        added_count = 0
-        for filename in files:
-            normalized = filename.strip().strip("{}")
-            if not normalized:
-                continue
-            ext = os.path.splitext(normalized)[1].lower()
-            if ext not in SUPPORTED_AUDIO_EXTENSIONS:
-                self.log(f"跳过不支持格式: {normalized}")
-                continue
-            if normalized not in self.audio_queue:
-                self.audio_queue.append(normalized)
-                added_count += 1
-        if added_count:
-            self.log(f"已添加 {added_count} 个文件到队列")
-        self._refresh_queue()
-
-    def _refresh_queue(self) -> None:
-        self.queue_listbox.delete(0, tk.END)
-        for file_path in self.audio_queue:
-            self.queue_listbox.insert(tk.END, file_path)
-        if self.audio_queue:
-            self.audio_path.set(self.audio_queue[0])
-        else:
-            self.audio_path.set("")
-
-    def _on_queue_selection(self, event: tk.Event) -> None:
-        del event
-        selected_indices = self.queue_listbox.curselection()
-        if not selected_indices:
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
             return
-        self.audio_path.set(self.audio_queue[selected_indices[0]])
+        super().dragMoveEvent(event)
 
-    def handle_drop(self, event: tk.Event) -> None:
-        data = event.data.strip()
-        if not data:
+    def dropEvent(self, event: QDropEvent) -> None:
+        files = self._extract_paths(event.mimeData())
+        if files:
+            self.files_dropped.emit(files)
+            event.acceptProposedAction()
             return
-        files = self.root.tk.splitlist(data)
-        self._add_files_to_queue(list(files))
+        super().dropEvent(event)
 
-    def paste_api_key(self) -> None:
-        try:
-            key = self.root.clipboard_get().strip()
-        except tk.TclError:
-            messagebox.showwarning("提示", "剪贴板为空或无法读取。")
-            return
-        if key:
-            self._set_api_keys_from_text(key)
+    def _extract_paths(self, mime_data: QMimeData) -> list[str]:
+        paths: list[str] = []
+        if mime_data.hasUrls():
+            for url in mime_data.urls():
+                if url.isLocalFile():
+                    paths.append(url.toLocalFile())
+        elif mime_data.hasText():
+            text = mime_data.text().strip()
+            if text:
+                try:
+                    paths.extend(shlex.split(text))
+                except ValueError:
+                    paths.append(text)
+        return paths
 
-    def import_api_key(self) -> None:
-        filename = filedialog.askopenfilename(
-            title="导入 API Key",
-            filetypes=(("Text", "*.txt *.env"), ("All files", "*.*")),
-        )
-        if not filename:
-            return
-        try:
-            with open(filename, "r", encoding="utf-8") as key_file:
-                content = key_file.read().strip()
-        except OSError as exc:
-            messagebox.showerror("错误", f"读取失败: {exc}")
-            return
 
-        keys = self._extract_api_keys(content)
-        if not keys:
-            messagebox.showwarning("提示", "未找到有效的 API Key。")
-            return
-        self._set_api_keys(keys)
+class TranscriptionWorker(QObject):
+    log_message = Signal(str)
+    progress_message = Signal(str)
+    finished = Signal(int, int)
+    file_completed = Signal(str)
+    file_failed = Signal(str, str)
 
-    def clear_api_key(self) -> None:
-        self.api_key_var.set("")
-        self.api_key_combo.set("")
-        self.api_key_history.clear()
-        self._update_api_key_combo()
+    def __init__(self, paths: list[str], options: TranscriptionOptions) -> None:
+        super().__init__()
+        self.paths = paths
+        self.options = options
 
-    def remove_selected_api_key(self) -> None:
-        selected = self.api_key_var.get().strip()
-        if not selected:
-            return
-        if selected in self.api_key_history:
-            self.api_key_history.remove(selected)
-        self.api_key_var.set(self.api_key_history[0] if self.api_key_history else "")
-        self._update_api_key_combo()
-
-    def _extract_api_keys(self, content: str) -> list[str]:
-        keys: list[str] = []
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("DEEPGRAM_API_KEY"):
-                _, value = line.split("=", 1)
-                candidate = value.strip().strip("'").strip('"')
-                if candidate:
-                    keys.append(candidate)
-                continue
-            for token in line.replace(",", " ").split():
-                if token:
-                    keys.append(token)
-        return list(dict.fromkeys(keys))
-
-    def _set_api_keys_from_text(self, text: str) -> None:
-        keys = self._extract_api_keys(text)
-        if not keys:
-            messagebox.showwarning("提示", "未找到有效的 API Key。")
-            return
-        self._set_api_keys(keys)
-
-    def _set_api_keys(self, keys: list[str]) -> None:
-        if not keys:
-            return
-        for key in keys:
-            self._add_api_key_to_history(key)
-        self.api_key_var.set(keys[0])
-        self._update_api_key_combo()
-
-    def _add_api_key_to_history(self, key: str) -> None:
-        if not key:
-            return
-        if key not in self.api_key_history:
-            self.api_key_history.append(key)
-
-    def _update_api_key_combo(self) -> None:
-        if hasattr(self, "api_key_combo"):
-            self.api_key_combo["values"] = self.api_key_history
-
-    def _on_api_key_selected(self, event: tk.Event) -> None:
-        selected = self.api_key_var.get().strip()
-        if selected:
-            self._add_api_key_to_history(selected)
-            self._update_api_key_combo()
-
-    def start_transcription(self) -> None:
-        if not self.audio_queue:
-            messagebox.showwarning("提示", "请先选择或拖放音频文件。")
-            return
-
-        invalid_paths = [path for path in self.audio_queue if not os.path.exists(path)]
-        if invalid_paths:
-            messagebox.showerror("错误", f"文件不存在: {invalid_paths[0]}")
-            return
-
-        options = TranscriptionOptions(
-            api_key=self.api_key_var.get().strip(),
-            model=self.model_var.get().strip(),
-            language=self._normalize_language(self.language_var.get().strip()),
-            detect_language=self.detect_language_var.get(),
-            word_timestamps=self.word_timestamps_var.get(),
-            punctuate=self.punctuate_var.get(),
-            smart_format=self.smart_format_var.get(),
-            utterances=self.utterances_var.get(),
-            diarize=self.diarize_var.get(),
-            numerals=self.numerals_var.get(),
-            filler_words=self.filler_words_var.get(),
-            profanity_filter=self.profanity_filter_var.get(),
-            paragraphs=self.paragraphs_var.get(),
-            max_chars=int(self.max_chars_var.get()),
-            max_duration=float(self.max_duration_var.get()),
-            max_pause=float(self.max_pause_var.get()),
-            word_segmentation=self.word_segmentation_var.get(),
-            timeout_seconds=int(self.timeout_seconds_var.get()),
-            max_retries=int(self.max_retries_var.get()),
-        )
-
-        self.status_text.set("转录中，请稍候...")
-        self.log("开始转录，请等待...")
-
-        self._save_settings()
-
-        threading.Thread(
-            target=self.transcribe_files,
-            args=(list(self.audio_queue), options),
-            daemon=True,
-        ).start()
-
-    def transcribe_files(self, paths: list[str], options: TranscriptionOptions) -> None:
-        total = len(paths)
+    def run(self) -> None:
+        total = len(self.paths)
         completed = 0
         failed = 0
 
-        self.log(f"批量模式已启用，并发任务数: {BATCH_PARALLEL_JOBS}")
+        self.log_message.emit(f"批量模式已启用，并发任务数: {BATCH_PARALLEL_JOBS}")
 
         with ThreadPoolExecutor(max_workers=BATCH_PARALLEL_JOBS) as executor:
-            future_to_path = {executor.submit(self._transcribe_single_file, path, options): path for path in paths}
+            future_to_path = {
+                executor.submit(self._transcribe_single_file, path, self.options): path for path in self.paths
+            }
             for future in as_completed(future_to_path):
                 completed += 1
                 path = future_to_path[future]
                 try:
                     future.result()
-                    self.log(f"[{completed}/{total}] 完成: {path}")
-                except Exception as exc:
+                    self.file_completed.emit(path)
+                    self.log_message.emit(f"[{completed}/{total}] 完成: {path}")
+                except Exception as exc:  # noqa: BLE001 - surfaced to UI log
                     failed += 1
-                    self.log(f"[{completed}/{total}] 转录失败: {exc}")
-                self.status_text.set(f"转录中 ({completed}/{total})...")
+                    self.file_failed.emit(path, str(exc))
+                    self.log_message.emit(f"[{completed}/{total}] 转录失败: {exc}")
+                self.progress_message.emit(f"转录中 ({completed}/{total})...")
 
-        if failed:
-            self.status_text.set(f"完成（失败 {failed}/{total}）")
-        else:
-            self.status_text.set("完成")
+        self.finished.emit(total, failed)
 
     def _transcribe_single_file(self, path: str, options: TranscriptionOptions) -> None:
         try:
@@ -487,7 +193,7 @@ class DeepgramSubtitleGUI:
                 audio_data = audio_file.read()
 
             params = self._build_params(options)
-            self.log(f"请求参数: {json.dumps(params, ensure_ascii=False)}")
+            self.log_message.emit(f"请求参数: {json.dumps(params, ensure_ascii=False)}")
 
             response = self._transcribe_with_retry(client, audio_data, params, options.max_retries)
             response_dict = self._response_to_dict(response)
@@ -499,23 +205,25 @@ class DeepgramSubtitleGUI:
             with open(output_path, "w", encoding="utf-8") as srt_file:
                 srt_file.write(srt_text)
 
-            self.log(f"转录完成，已保存字幕: {output_path}")
-        except Exception as exc:
+            self.log_message.emit(f"转录完成，已保存字幕: {output_path}")
+        except Exception as exc:  # noqa: BLE001 - wrapped with file path context
             raise RuntimeError(f"{path}: {exc}") from exc
 
-    def _transcribe_with_retry(self, client: DeepgramClient, audio_data: bytes, params: dict, max_retries: int) -> object:
+    def _transcribe_with_retry(
+        self, client: DeepgramClient, audio_data: bytes, params: dict, max_retries: int
+    ) -> object:
         retry_count = max(0, max_retries)
         last_error: Exception | None = None
 
         for attempt in range(retry_count + 1):
             try:
                 return self._transcribe_with_sdk_compat(client, audio_data, params)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - compatibility + network handling
                 if attempt >= retry_count or not self._is_retryable_network_error(exc):
                     raise
                 last_error = exc
-                wait_seconds = min(8, 2 ** attempt)
-                self.log(
+                wait_seconds = min(8, 2**attempt)
+                self.log_message.emit(
                     f"网络异常，准备重试 ({attempt + 1}/{retry_count})，{wait_seconds}s 后再次尝试: {exc}"
                 )
                 time.sleep(wait_seconds)
@@ -525,9 +233,7 @@ class DeepgramSubtitleGUI:
         raise RuntimeError("未知错误：转录重试流程未返回结果。")
 
     def _transcribe_with_sdk_compat(self, client: DeepgramClient, audio_data: bytes, params: dict) -> object:
-        """兼容 Deepgram SDK 新旧接口的 transcribe_file 调用方式。"""
         transcribe_method = client.listen.v1.media.transcribe_file
-
         call_variants = [
             lambda: transcribe_method(request=audio_data, **params),
             lambda: transcribe_method(audio_data, **params),
@@ -580,7 +286,7 @@ class DeepgramSubtitleGUI:
         endpoint = f"https://api.deepgram.com/v1/listen/{request_id}?{query}"
         start_time = time.monotonic()
 
-        self.log(
+        self.log_message.emit(
             f"未直接返回结果，进入异步结果轮询（间隔 {POLL_INTERVAL_SECONDS}s，超时 {POLL_TIMEOUT_SECONDS}s）..."
         )
 
@@ -618,109 +324,12 @@ class DeepgramSubtitleGUI:
             "profanity_filter": options.profanity_filter,
             "paragraphs": options.paragraphs,
         }
-
         request_options: RequestOptions = {
             "timeout_in_seconds": max(1, options.timeout_seconds),
             "max_retries": max(0, options.max_retries),
         }
         params["request_options"] = request_options
-
-        params = {key: value for key, value in params.items() if value is not None}
-        return params
-
-    def _language_options(self) -> dict:
-        return {
-            "自动(检测)": "",
-            "多语言(multi)": "multi",
-            "英语(en)": "en",
-            "日语(ja)": "ja",
-            "中文(zh)": "zh",
-            "韩语(ko)": "ko",
-            "法语(fr)": "fr",
-            "德语(de)": "de",
-            "西班牙语(es)": "es",
-            "葡萄牙语(pt)": "pt",
-            "意大利语(it)": "it",
-        }
-
-    def _normalize_language(self, value: str) -> str:
-        value = value.strip()
-        if not value:
-            return ""
-        options = self._language_options()
-        return options.get(value, value)
-
-    def _settings_path(self) -> str:
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "gui_settings.json")
-
-    def _load_settings(self) -> None:
-        path = self._settings_path()
-        if not os.path.exists(path):
-            return
-        try:
-            with open(path, "r", encoding="utf-8") as settings_file:
-                data = json.load(settings_file)
-        except (OSError, json.JSONDecodeError) as exc:
-            self.log(f"读取设置失败: {exc}")
-            return
-
-        self.api_key_var.set(data.get("api_key", self.api_key_var.get()))
-        self.api_key_history = list(dict.fromkeys(data.get("api_keys", [])))
-        if self.api_key_var.get():
-            self._add_api_key_to_history(self.api_key_var.get())
-        self._update_api_key_combo()
-        self.model_var.set(data.get("model", self.model_var.get()))
-        self.language_var.set(data.get("language", self.language_var.get()))
-        self.detect_language_var.set(data.get("detect_language", self.detect_language_var.get()))
-        self.word_timestamps_var.set(data.get("word_timestamps", self.word_timestamps_var.get()))
-        self.punctuate_var.set(data.get("punctuate", self.punctuate_var.get()))
-        self.smart_format_var.set(data.get("smart_format", self.smart_format_var.get()))
-        self.utterances_var.set(data.get("utterances", self.utterances_var.get()))
-        self.diarize_var.set(data.get("diarize", self.diarize_var.get()))
-        self.numerals_var.set(data.get("numerals", self.numerals_var.get()))
-        self.filler_words_var.set(data.get("filler_words", self.filler_words_var.get()))
-        self.profanity_filter_var.set(data.get("profanity_filter", self.profanity_filter_var.get()))
-        self.paragraphs_var.set(data.get("paragraphs", self.paragraphs_var.get()))
-        self.max_chars_var.set(int(data.get("max_chars", self.max_chars_var.get())))
-        self.max_duration_var.set(float(data.get("max_duration", self.max_duration_var.get())))
-        self.max_pause_var.set(float(data.get("max_pause", self.max_pause_var.get())))
-        self.word_segmentation_var.set(bool(data.get("word_segmentation", self.word_segmentation_var.get())))
-        self.timeout_seconds_var.set(int(data.get("timeout_seconds", self.timeout_seconds_var.get())))
-        self.max_retries_var.set(int(data.get("max_retries", self.max_retries_var.get())))
-
-    def _ensure_settings_file(self) -> None:
-        if not os.path.exists(self._settings_path()):
-            self._save_settings()
-
-    def _save_settings(self) -> None:
-        self._add_api_key_to_history(self.api_key_var.get().strip())
-        data = {
-            "api_key": self.api_key_var.get().strip(),
-            "api_keys": self.api_key_history,
-            "model": self.model_var.get().strip(),
-            "language": self.language_var.get().strip(),
-            "detect_language": self.detect_language_var.get(),
-            "word_timestamps": self.word_timestamps_var.get(),
-            "punctuate": self.punctuate_var.get(),
-            "smart_format": self.smart_format_var.get(),
-            "utterances": self.utterances_var.get(),
-            "diarize": self.diarize_var.get(),
-            "numerals": self.numerals_var.get(),
-            "filler_words": self.filler_words_var.get(),
-            "profanity_filter": self.profanity_filter_var.get(),
-            "paragraphs": self.paragraphs_var.get(),
-            "max_chars": int(self.max_chars_var.get()),
-            "max_duration": float(self.max_duration_var.get()),
-            "max_pause": float(self.max_pause_var.get()),
-            "word_segmentation": self.word_segmentation_var.get(),
-            "timeout_seconds": int(self.timeout_seconds_var.get()),
-            "max_retries": int(self.max_retries_var.get()),
-        }
-        try:
-            with open(self._settings_path(), "w", encoding="utf-8") as settings_file:
-                json.dump(data, settings_file, ensure_ascii=False, indent=2)
-        except OSError as exc:
-            self.log(f"保存设置失败: {exc}")
+        return {key: value for key, value in params.items() if value is not None}
 
     def _response_to_dict(self, response: object) -> dict:
         if hasattr(response, "model_dump"):
@@ -790,13 +399,7 @@ class DeepgramSubtitleGUI:
             )
         return "\n".join(lines)
 
-    def _srt_from_words(
-        self,
-        words: list,
-        max_chars: int,
-        max_duration: float,
-        max_pause: float,
-    ) -> str:
+    def _srt_from_words(self, words: list, max_chars: int, max_duration: float, max_pause: float) -> str:
         if not words:
             return ""
         segments = []
@@ -833,24 +436,558 @@ class DeepgramSubtitleGUI:
         secs, ms = divmod(remainder, 1000)
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
 
-    def log(self, message: str) -> None:
-        self.log_output.insert(tk.END, message + "\n")
-        self.log_output.see(tk.END)
 
-    def on_close(self) -> None:
+class DeepgramSubtitleGUI(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("Deepgram 字幕转录 · PySide6")
+        self.resize(1120, 860)
+        self.audio_queue: list[str] = []
+        self.api_key_history: list[str] = []
+        self.worker_thread: QThread | None = None
+        self.worker: TranscriptionWorker | None = None
+        self.settings = QSettings("deepgram-python-sdk", "deepgram-subtitle-gui")
+
+        self._build_ui()
+        self._load_settings()
+        self._update_queue_placeholder()
+        self.statusBar().showMessage("准备就绪")
+
+    def _build_ui(self) -> None:
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
+
+        header = QFrame()
+        header.setObjectName("heroCard")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(18, 18, 18, 18)
+        title = QLabel("Deepgram 字幕转录")
+        title.setObjectName("titleLabel")
+        subtitle = QLabel("PySide6 + qdarktheme 界面，支持拖拽上传、批量转写、轮询与 SRT 导出。")
+        subtitle.setObjectName("subtitleLabel")
+        subtitle.setWordWrap(True)
+        header_layout.addWidget(title)
+        header_layout.addWidget(subtitle)
+        main_layout.addWidget(header)
+
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(12)
+        main_layout.addLayout(content_layout, 1)
+
+        left_column = QVBoxLayout()
+        left_column.setSpacing(12)
+        content_layout.addLayout(left_column, 4)
+
+        right_column = QVBoxLayout()
+        right_column.setSpacing(12)
+        content_layout.addLayout(right_column, 5)
+
+        queue_group = QGroupBox("音频队列")
+        queue_layout = QVBoxLayout(queue_group)
+
+        self.queue_list = DropListWidget()
+        self.queue_list.setMinimumHeight(220)
+        self.queue_list.files_dropped.connect(self._add_files_to_queue)
+        self.queue_list.itemSelectionChanged.connect(self._on_queue_selection)
+        queue_layout.addWidget(self.queue_list)
+
+        queue_actions = QHBoxLayout()
+        self.add_files_button = QPushButton("添加文件")
+        self.remove_files_button = QPushButton("移除选中")
+        self.clear_files_button = QPushButton("清空队列")
+        queue_actions.addWidget(self.add_files_button)
+        queue_actions.addWidget(self.remove_files_button)
+        queue_actions.addWidget(self.clear_files_button)
+        queue_layout.addLayout(queue_actions)
+
+        left_column.addWidget(queue_group)
+
+        actions_group = QGroupBox("执行")
+        actions_layout = QVBoxLayout(actions_group)
+        self.start_button = QPushButton("开始转录")
+        self.start_button.setMinimumHeight(46)
+        actions_layout.addWidget(self.start_button)
+        left_column.addWidget(actions_group)
+
+        log_group = QGroupBox("日志")
+        log_layout = QVBoxLayout(log_group)
+        self.log_output = QPlainTextEdit()
+        self.log_output.setReadOnly(True)
+        self.log_output.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        log_layout.addWidget(self.log_output)
+        left_column.addWidget(log_group, 1)
+
+        options_group = QGroupBox("转录参数")
+        options_layout = QVBoxLayout(options_group)
+
+        form_layout = QFormLayout()
+        form_layout.setLabelAlignment(Qt.AlignLeft)
+        form_layout.setFormAlignment(Qt.AlignTop)
+
+        self.api_key_combo = QComboBox()
+        self.api_key_combo.setEditable(True)
+        self.api_key_combo.setInsertPolicy(QComboBox.NoInsert)
+        api_row = QHBoxLayout()
+        api_row.addWidget(self.api_key_combo, 1)
+        self.paste_api_button = QPushButton("粘贴")
+        self.import_api_button = QPushButton("导入")
+        self.clear_api_button = QPushButton("清空")
+        self.remove_api_button = QPushButton("删除当前")
+        for button in [self.paste_api_button, self.import_api_button, self.clear_api_button, self.remove_api_button]:
+            api_row.addWidget(button)
+        api_widget = QWidget()
+        api_widget.setLayout(api_row)
+        form_layout.addRow("API Key", api_widget)
+
+        self.model_edit = QLineEdit("nova-3")
+        form_layout.addRow("模型(model)", self.model_edit)
+
+        self.language_combo = QComboBox()
+        self.language_combo.addItems(LANGUAGE_OPTIONS.keys())
+        form_layout.addRow("语言(language)", self.language_combo)
+
+        self.max_chars_edit = QLineEdit("16")
+        self.max_duration_edit = QLineEdit("6.0")
+        self.max_pause_edit = QLineEdit("1.0")
+        self.timeout_edit = QLineEdit("300")
+        self.retry_edit = QLineEdit("2")
+        form_layout.addRow("每段最大字符数", self.max_chars_edit)
+        form_layout.addRow("每段最长期限(秒)", self.max_duration_edit)
+        form_layout.addRow("每段最大停顿(秒)", self.max_pause_edit)
+        form_layout.addRow("请求超时(秒)", self.timeout_edit)
+        form_layout.addRow("重试次数", self.retry_edit)
+        options_layout.addLayout(form_layout)
+
+        checkbox_grid = QGridLayout()
+        checkbox_specs = [
+            ("自动识别语言", "detect_language"),
+            ("字词级时间戳", "word_timestamps"),
+            ("标点", "punctuate"),
+            ("智能格式化", "smart_format"),
+            ("按话语分段(utterances)", "utterances"),
+            ("说话人区分", "diarize"),
+            ("数字转写", "numerals"),
+            ("填充词(filler)", "filler_words"),
+            ("敏感词过滤", "profanity_filter"),
+            ("段落(paragraphs)", "paragraphs"),
+            ("启用字词级自动分段", "word_segmentation"),
+        ]
+        self.checkboxes: dict[str, QCheckBox] = {}
+        for index, (label, key) in enumerate(checkbox_specs):
+            checkbox = QCheckBox(label)
+            self.checkboxes[key] = checkbox
+            checkbox_grid.addWidget(checkbox, index // 2, index % 2)
+        options_layout.addLayout(checkbox_grid)
+        right_column.addWidget(options_group)
+
+        self.checkboxes["word_timestamps"].setChecked(True)
+        self.checkboxes["punctuate"].setChecked(True)
+        self.checkboxes["smart_format"].setChecked(True)
+        self.checkboxes["utterances"].setChecked(True)
+        self.checkboxes["numerals"].setChecked(True)
+        self.checkboxes["word_segmentation"].setChecked(True)
+
+        self.add_files_button.clicked.connect(self.select_files)
+        self.remove_files_button.clicked.connect(self.remove_selected_files)
+        self.clear_files_button.clicked.connect(self.clear_queue)
+        self.start_button.clicked.connect(self.start_transcription)
+        self.paste_api_button.clicked.connect(self.paste_api_key)
+        self.import_api_button.clicked.connect(self.import_api_key)
+        self.clear_api_button.clicked.connect(self.clear_api_key)
+        self.remove_api_button.clicked.connect(self.remove_selected_api_key)
+        self.api_key_combo.currentTextChanged.connect(self._on_api_key_selected)
+        self.api_key_combo.lineEdit().editingFinished.connect(self._remember_current_api_key)
+
+        clear_logs_action = QAction("清空日志", self)
+        clear_logs_action.triggered.connect(self.log_output.clear)
+        self.addAction(clear_logs_action)
+
+        status_bar = QStatusBar()
+        self.setStatusBar(status_bar)
+
+    def select_files(self) -> None:
+        filter_text = f"音频文件 ({' '.join(f'*{ext}' for ext in SUPPORTED_AUDIO_EXTENSIONS)});;所有文件 (*.*)"
+        filenames, _ = QFileDialog.getOpenFileNames(self, "选择音频文件", "", filter_text)
+        self._add_files_to_queue(filenames)
+
+    def remove_selected_files(self) -> None:
+        rows = sorted({self.queue_list.row(item) for item in self.queue_list.selectedItems()}, reverse=True)
+        if not rows:
+            return
+        for row in rows:
+            del self.audio_queue[row]
+        self._refresh_queue()
+
+    def clear_queue(self) -> None:
+        self.audio_queue.clear()
+        self._refresh_queue()
+
+    def _add_files_to_queue(self, files: list[str]) -> None:
+        added_count = 0
+        for filename in files:
+            normalized = os.path.abspath(filename.strip().strip("{}").strip())
+            if not normalized:
+                continue
+            ext = os.path.splitext(normalized)[1].lower()
+            if ext not in SUPPORTED_AUDIO_EXTENSIONS:
+                self.log(f"跳过不支持格式: {normalized}")
+                continue
+            if normalized not in self.audio_queue:
+                self.audio_queue.append(normalized)
+                added_count += 1
+        if added_count:
+            self.log(f"已添加 {added_count} 个文件到队列")
+        self._refresh_queue()
+
+    def _refresh_queue(self) -> None:
+        self.queue_list.clear()
+        for file_path in self.audio_queue:
+            QListWidgetItem(file_path, self.queue_list)
+        self._update_queue_placeholder()
+
+    def _update_queue_placeholder(self) -> None:
+        if not self.audio_queue:
+            self.queue_list.setStyleSheet("QListWidget { border: 1px dashed palette(mid); }")
+            self.queue_list.setToolTip("拖拽音频文件到这里")
+        else:
+            self.queue_list.setStyleSheet("")
+            self.queue_list.setToolTip("")
+
+    def _on_queue_selection(self) -> None:
+        if not self.queue_list.selectedItems():
+            return
+
+    def paste_api_key(self) -> None:
+        clipboard = QApplication.clipboard()
+        key = clipboard.text().strip()
+        if not key:
+            QMessageBox.warning(self, "提示", "剪贴板为空或无法读取。")
+            return
+        self._set_api_keys_from_text(key)
+
+    def import_api_key(self) -> None:
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入 API Key",
+            "",
+            "文本文件 (*.txt *.env);;所有文件 (*.*)",
+        )
+        if not filename:
+            return
+        try:
+            with open(filename, "r", encoding="utf-8") as key_file:
+                content = key_file.read().strip()
+        except OSError as exc:
+            QMessageBox.critical(self, "错误", f"读取失败: {exc}")
+            return
+
+        keys = self._extract_api_keys(content)
+        if not keys:
+            QMessageBox.warning(self, "提示", "未找到有效的 API Key。")
+            return
+        self._set_api_keys(keys)
+
+    def clear_api_key(self) -> None:
+        self.api_key_combo.setCurrentText("")
+        self.api_key_history.clear()
+        self._update_api_key_combo()
+
+    def remove_selected_api_key(self) -> None:
+        selected = self.api_key_combo.currentText().strip()
+        if not selected:
+            return
+        if selected in self.api_key_history:
+            self.api_key_history.remove(selected)
+        self.api_key_combo.setCurrentText(self.api_key_history[0] if self.api_key_history else "")
+        self._update_api_key_combo()
+
+    def _extract_api_keys(self, content: str) -> list[str]:
+        keys: list[str] = []
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("DEEPGRAM_API_KEY"):
+                _, value = line.split("=", 1)
+                candidate = value.strip().strip("'").strip('"')
+                if candidate:
+                    keys.append(candidate)
+                continue
+            for token in line.replace(",", " ").split():
+                if token:
+                    keys.append(token)
+        return list(dict.fromkeys(keys))
+
+    def _set_api_keys_from_text(self, text: str) -> None:
+        keys = self._extract_api_keys(text)
+        if not keys:
+            QMessageBox.warning(self, "提示", "未找到有效的 API Key。")
+            return
+        self._set_api_keys(keys)
+
+    def _set_api_keys(self, keys: list[str]) -> None:
+        for key in keys:
+            self._add_api_key_to_history(key)
+        self.api_key_combo.setCurrentText(keys[0])
+        self._update_api_key_combo()
+
+    def _add_api_key_to_history(self, key: str) -> None:
+        if key and key not in self.api_key_history:
+            self.api_key_history.append(key)
+
+    def _update_api_key_combo(self) -> None:
+        current_text = self.api_key_combo.currentText()
+        self.api_key_combo.blockSignals(True)
+        self.api_key_combo.clear()
+        self.api_key_combo.addItems(self.api_key_history)
+        self.api_key_combo.setCurrentText(current_text)
+        self.api_key_combo.blockSignals(False)
+
+    def _on_api_key_selected(self, selected: str) -> None:
+        if selected.strip():
+            self._add_api_key_to_history(selected.strip())
+
+    def _remember_current_api_key(self) -> None:
+        selected = self.api_key_combo.currentText().strip()
+        if selected:
+            self._add_api_key_to_history(selected)
+            self._update_api_key_combo()
+
+    def _normalize_language(self, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return ""
+        return LANGUAGE_OPTIONS.get(value, value)
+
+    def _collect_options(self) -> TranscriptionOptions:
+        return TranscriptionOptions(
+            api_key=self.api_key_combo.currentText().strip(),
+            model=self.model_edit.text().strip(),
+            language=self._normalize_language(self.language_combo.currentText().strip()),
+            detect_language=self.checkboxes["detect_language"].isChecked(),
+            word_timestamps=self.checkboxes["word_timestamps"].isChecked(),
+            punctuate=self.checkboxes["punctuate"].isChecked(),
+            smart_format=self.checkboxes["smart_format"].isChecked(),
+            utterances=self.checkboxes["utterances"].isChecked(),
+            diarize=self.checkboxes["diarize"].isChecked(),
+            numerals=self.checkboxes["numerals"].isChecked(),
+            filler_words=self.checkboxes["filler_words"].isChecked(),
+            profanity_filter=self.checkboxes["profanity_filter"].isChecked(),
+            paragraphs=self.checkboxes["paragraphs"].isChecked(),
+            max_chars=int(self.max_chars_edit.text().strip() or "16"),
+            max_duration=float(self.max_duration_edit.text().strip() or "6.0"),
+            max_pause=float(self.max_pause_edit.text().strip() or "1.0"),
+            word_segmentation=self.checkboxes["word_segmentation"].isChecked(),
+            timeout_seconds=int(self.timeout_edit.text().strip() or "300"),
+            max_retries=int(self.retry_edit.text().strip() or "2"),
+        )
+
+    def start_transcription(self) -> None:
+        if self.worker_thread is not None:
+            QMessageBox.information(self, "提示", "已有转录任务正在运行，请等待完成。")
+            return
+        if not self.audio_queue:
+            QMessageBox.warning(self, "提示", "请先选择或拖放音频文件。")
+            return
+
+        invalid_paths = [path for path in self.audio_queue if not os.path.exists(path)]
+        if invalid_paths:
+            QMessageBox.critical(self, "错误", f"文件不存在: {invalid_paths[0]}")
+            return
+
+        try:
+            options = self._collect_options()
+        except ValueError as exc:
+            QMessageBox.critical(self, "错误", f"参数格式错误: {exc}")
+            return
+
         self._save_settings()
-        self.root.destroy()
+        self.statusBar().showMessage("转录中，请稍候...")
+        self.log("开始转录，请等待...")
+        self._set_running_state(True)
+
+        self.worker_thread = QThread(self)
+        self.worker = TranscriptionWorker(list(self.audio_queue), options)
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.log_message.connect(self.log)
+        self.worker.progress_message.connect(self.statusBar().showMessage)
+        self.worker.finished.connect(self._on_transcription_finished)
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.finished.connect(self._cleanup_worker_thread)
+        self.worker_thread.start()
+
+    def _set_running_state(self, running: bool) -> None:
+        for widget in [
+            self.start_button,
+            self.add_files_button,
+            self.remove_files_button,
+            self.clear_files_button,
+            self.paste_api_button,
+            self.import_api_button,
+            self.clear_api_button,
+            self.remove_api_button,
+        ]:
+            widget.setDisabled(running)
+
+    def _on_transcription_finished(self, total: int, failed: int) -> None:
+        if failed:
+            self.statusBar().showMessage(f"完成（失败 {failed}/{total}）")
+            self.log(f"全部任务结束：总计 {total} 个，失败 {failed} 个。")
+        else:
+            self.statusBar().showMessage("完成")
+            self.log(f"全部任务结束：总计 {total} 个，全部成功。")
+        self._set_running_state(False)
+
+    def _cleanup_worker_thread(self) -> None:
+        self.worker_thread = None
+        self.worker = None
+
+    def _load_settings(self) -> None:
+        api_keys = self.settings.value("api_keys", [], list)
+        if isinstance(api_keys, str):
+            api_keys = [api_keys]
+        self.api_key_history = list(dict.fromkeys(api_keys))
+        api_key = self.settings.value("api_key", "", str)
+        if api_key:
+            self._add_api_key_to_history(api_key)
+        self._update_api_key_combo()
+        self.api_key_combo.setCurrentText(api_key)
+
+        self.model_edit.setText(self.settings.value("model", self.model_edit.text(), str))
+        language = self.settings.value("language", self.language_combo.currentText(), str)
+        index = self.language_combo.findText(language)
+        if index >= 0:
+            self.language_combo.setCurrentIndex(index)
+        else:
+            self.language_combo.setCurrentText(language)
+
+        for key in self.checkboxes:
+            default = self.checkboxes[key].isChecked()
+            value = self.settings.value(key, default, bool)
+            if isinstance(value, str):
+                value = value.lower() in {"1", "true", "yes"}
+            self.checkboxes[key].setChecked(bool(value))
+
+        self.max_chars_edit.setText(str(self.settings.value("max_chars", self.max_chars_edit.text(), str)))
+        self.max_duration_edit.setText(str(self.settings.value("max_duration", self.max_duration_edit.text(), str)))
+        self.max_pause_edit.setText(str(self.settings.value("max_pause", self.max_pause_edit.text(), str)))
+        self.timeout_edit.setText(str(self.settings.value("timeout_seconds", self.timeout_edit.text(), str)))
+        self.retry_edit.setText(str(self.settings.value("max_retries", self.retry_edit.text(), str)))
+
+    def _save_settings(self) -> None:
+        self._remember_current_api_key()
+        self.settings.setValue("api_key", self.api_key_combo.currentText().strip())
+        self.settings.setValue("api_keys", self.api_key_history)
+        self.settings.setValue("model", self.model_edit.text().strip())
+        self.settings.setValue("language", self.language_combo.currentText().strip())
+        for key, checkbox in self.checkboxes.items():
+            self.settings.setValue(key, checkbox.isChecked())
+        self.settings.setValue("max_chars", self.max_chars_edit.text().strip())
+        self.settings.setValue("max_duration", self.max_duration_edit.text().strip())
+        self.settings.setValue("max_pause", self.max_pause_edit.text().strip())
+        self.settings.setValue("timeout_seconds", self.timeout_edit.text().strip())
+        self.settings.setValue("max_retries", self.retry_edit.text().strip())
+        self.settings.sync()
+
+    def log(self, message: str) -> None:
+        self.log_output.appendPlainText(message)
+        scrollbar = self.log_output.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._save_settings()
+        if self.worker_thread is not None:
+            QMessageBox.information(self, "提示", "后台任务仍在运行，窗口将在任务结束后退出。")
+            event.ignore()
+            return
+        event.accept()
+
+
+def _apply_theme(app: QApplication) -> None:
+    custom_qss = """
+        QWidget { color: #E6EAF2; }
+        QLabel { color: #E6EAF2; background: transparent; }
+        QLabel#titleLabel { font-size: 28px; font-weight: 700; color: #F8FAFC; }
+        QLabel#subtitleLabel { color: #CBD5E1; font-size: 13px; }
+        QGroupBox {
+            font-weight: 600;
+            border: 1px solid #3F4654;
+            border-radius: 10px;
+            margin-top: 12px;
+            padding-top: 14px;
+            background: #22252D;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 12px;
+            padding: 0 6px;
+            color: #F8FAFC;
+        }
+        QPushButton {
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1px solid #4B5563;
+            background: #2D3748;
+            color: #F8FAFC;
+        }
+        QPushButton:hover { background: #3B475A; }
+        QPlainTextEdit, QListWidget, QLineEdit, QComboBox {
+            border-radius: 8px;
+            border: 1px solid #4B5563;
+            background: #151821;
+            color: #F8FAFC;
+            selection-background-color: #2563EB;
+            selection-color: #F8FAFC;
+            padding: 6px;
+        }
+        QComboBox QAbstractItemView {
+            background: #151821;
+            color: #F8FAFC;
+            border: 1px solid #4B5563;
+            selection-background-color: #2563EB;
+        }
+        QPlainTextEdit[readOnly="true"], QListWidget { background: #11141B; }
+        QFrame#heroCard {
+            border-radius: 16px;
+            border: 1px solid #3F4654;
+            background: #2A2F3A;
+        }
+        QStatusBar { color: #E6EAF2; }
+    """
+
+    if qdarktheme is None:
+        app.setStyle("Fusion")
+        app.setStyleSheet(custom_qss)
+        return
+
+    if hasattr(qdarktheme, "setup_theme"):
+        qdarktheme.setup_theme("auto", additional_qss=custom_qss)
+        return
+
+    if hasattr(qdarktheme, "load_stylesheet"):
+        app.setStyleSheet(qdarktheme.load_stylesheet() + "\n" + custom_qss)
+        return
+
+    app.setStyle("Fusion")
+    app.setStyleSheet(custom_qss)
+
+
+def main() -> int:
+    app = QApplication(sys.argv)
+    app.setApplicationName("Deepgram Subtitle GUI")
+    app.setOrganizationName("deepgram-python-sdk")
+    _apply_theme(app)
+
+    window = DeepgramSubtitleGUI()
+    window.show()
+    return app.exec()
 
 
 if __name__ == "__main__":
-    try:
-        from tkinterdnd2 import TkinterDnD
-
-        root = TkinterDnD.Tk()
-        dnd_available = True
-    except Exception:
-        root = tk.Tk()
-        dnd_available = False
-
-    app = DeepgramSubtitleGUI(root, dnd_available=dnd_available)
-    root.mainloop()
+    raise SystemExit(main())
