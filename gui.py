@@ -8,12 +8,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from urllib import error, parse, request
 from urllib.parse import unquote, urlparse
 
 from dotenv import load_dotenv
 from PySide6.QtCore import QMimeData, QObject, QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QColor, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QDragEnterEvent, QDropEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -25,18 +26,18 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QPlainTextEdit,
     QProgressBar,
+    QPushButton,
     QSplitter,
     QStatusBar,
     QVBoxLayout,
     QWidget,
-    QLineEdit,
 )
 
 load_dotenv()
@@ -48,6 +49,16 @@ except ImportError:  # optional dependency at runtime for graceful fallback
 
 from deepgram import DeepgramClient
 from deepgram.core import RequestOptions
+
+APP_ROOT = Path(__file__).resolve().parent
+APP_ICON_PATH = APP_ROOT / "assets" / "app_icon.svg"
+
+
+def _load_app_icon() -> QIcon:
+    if APP_ICON_PATH.exists():
+        return QIcon(str(APP_ICON_PATH))
+    return QIcon()
+
 
 POLL_INTERVAL_SECONDS = 2
 POLL_TIMEOUT_SECONDS = 300
@@ -1148,9 +1159,14 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Deepgram Subtitle GUI")
     app.setOrganizationName("deepgram-python-sdk")
+    app_icon = _load_app_icon()
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
     _apply_theme(app)
 
     window = DeepgramSubtitleGUI()
+    if not app_icon.isNull():
+        window.setWindowIcon(app_icon)
     window.show()
     return app.exec()
 
