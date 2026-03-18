@@ -12,7 +12,7 @@ from urllib import error, parse, request
 from urllib.parse import unquote, urlparse
 
 from dotenv import load_dotenv
-from PySide6.QtCore import QMimeData, QObject, QSettings, Qt, QThread, Signal
+from PySide6.QtCore import QMimeData, QObject, QSettings, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QColor, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -490,25 +490,25 @@ class DeepgramSubtitleGUI(QMainWindow):
         header_layout.addWidget(subtitle)
         main_layout.addWidget(header)
 
-        content_splitter = QSplitter(Qt.Horizontal)
-        content_splitter.setChildrenCollapsible(False)
-        main_layout.addWidget(content_splitter, 1)
+        self.content_splitter = QSplitter(Qt.Horizontal)
+        self.content_splitter.setChildrenCollapsible(False)
+        main_layout.addWidget(self.content_splitter, 1)
 
         left_panel = QWidget()
         left_column = QVBoxLayout(left_panel)
         left_column.setContentsMargins(0, 0, 0, 0)
         left_column.setSpacing(12)
-        content_splitter.addWidget(left_panel)
+        self.content_splitter.addWidget(left_panel)
 
         right_panel = QWidget()
         right_column = QVBoxLayout(right_panel)
         right_column.setContentsMargins(0, 0, 0, 0)
         right_column.setSpacing(12)
-        content_splitter.addWidget(right_panel)
+        self.content_splitter.addWidget(right_panel)
 
-        content_splitter.setStretchFactor(0, 9)
-        content_splitter.setStretchFactor(1, 11)
-        content_splitter.setSizes([900, 1100])
+        self.content_splitter.setStretchFactor(0, 9)
+        self.content_splitter.setStretchFactor(1, 11)
+        QTimer.singleShot(0, self._apply_default_splitter_ratio)
 
         queue_group = QGroupBox("音频队列")
         queue_layout = QVBoxLayout(queue_group)
@@ -650,6 +650,15 @@ class DeepgramSubtitleGUI(QMainWindow):
 
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
+
+
+    def _apply_default_splitter_ratio(self) -> None:
+        total_width = self.content_splitter.size().width()
+        if total_width <= 0:
+            total_width = max(1, self.width() - 32)
+        left_width = int(total_width * 9 / 20)
+        right_width = max(1, total_width - left_width)
+        self.content_splitter.setSizes([left_width, right_width])
 
     def select_files(self) -> None:
         filter_text = f"音频文件 ({' '.join(f'*{ext}' for ext in SUPPORTED_AUDIO_EXTENSIONS)});;所有文件 (*.*)"
