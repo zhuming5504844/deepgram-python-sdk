@@ -12,7 +12,7 @@
 
 ```bash
 python -m pip install -e .
-python -m pip install PySide6 pyqtdarktheme python-dotenv pyinstaller
+python -m pip install PySide6 "pyqtdarktheme>=2.1.0" python-dotenv pyinstaller
 ```
 
 ## 命令行打包
