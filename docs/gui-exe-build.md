@@ -12,8 +12,10 @@
 
 ```bash
 python -m pip install -e .
-python -m pip install PySide6 "pyqtdarktheme>=2.1.0" python-dotenv pyinstaller
+python -m pip install PySide6 pyqtdarktheme python-dotenv pyinstaller
 ```
+
+> 这里保持 `pyqtdarktheme` 不锁死版本，让 `pip` 自动选择当前 Python 版本可安装的最新兼容版本；例如 `2.1.0` 在 PyPI 上声明仅支持 Python `<3.12`。
 
 ## 命令行打包
 
