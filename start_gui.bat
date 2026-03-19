@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
+set "PYTHONPATH=%~dp0src;%PYTHONPATH%"
+
 echo Installing GUI runtime dependencies...
 python -m pip install PySide6 pyqtdarktheme python-dotenv
 if errorlevel 1 (
